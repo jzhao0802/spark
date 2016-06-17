@@ -1,0 +1,19 @@
+There are 2 functions:
+1. function "data_ds": it is used to do descriptive analysis, the result include 6 colunms:
+	Variable: variables name
+	cntNonZero: the amount of non zero values
+	Min: the minimum value
+	Avg: the average value
+	SD:  the variance
+	Max: the maximum value
+2. function "cross_tb": it is used to do cross table between response and other columns. there are 2 steps:
+	step 1: Calculate the amount of distinct values in each columns, for the columns more than 2 levels, we won't calculate the cross table.
+	setp 2: Based on the columns selected from step 1. calculate the cross table with response and output the results.
+		file 1 - "Cross_Table.csv": this is the cross tables of all selected columns.
+		file 2 - "Dropped_variables.csv": this is the columns that should be dropped in the model using the following criterion:
+			1). Completed separated the response;
+			2). Positive response rate is less than our pre-set value(minrate in the code);
+
+
+
+
