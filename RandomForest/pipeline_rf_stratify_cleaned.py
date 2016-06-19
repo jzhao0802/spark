@@ -70,12 +70,29 @@ def main(sc, s3_path=s3_path, inpath=inpath, data_file=data_file,
 
     #reading in data
     data = load_csv_file(sc, s3_path, inpath, data_file, par)
-    nData = data.count()
+    # nData = data.count()
     
     # stratify
-    npFoldIDs = np.array(list(range(fold))*np.ceil(float(nData) / fold))
-    npFoldIDs = npFoldIDs[0:nData]
-    np.random.shuffle(npFoldIDs)
+    labelList = data.select("label").collect()
+    labels = [row.asDict()["label"] for row in labelList]
+    nPoses = sum(labels)
+    nData = len(labels)
+    nNegs = nData - nPoses
+    npFoldIDsPos = np.array(list(range(fold))*np.ceil(float(nPoses) / fold))
+    # npFoldIDsPos = npFoldIDsPos[0:nPoses]
+    npFoldIDsNeg = np.array(list(range(fold))*np.ceil(float(nNegs) / fold))
+    # npFoldIDsNeg = npFoldIDsNeg[0:nNegs]
+    npFoldIDs = np.zeros((nData, ))
+    iPos = 0
+    iNeg = 0
+    for i in range(nData):
+        if labels[i] == 0:
+            npFoldIDs[i] = npFoldIDsNeg[iNeg]
+            iNeg += 1
+        else:
+            npFoldIDs[i] = npFoldIDsPos[iPos]
+            iPos += 1    
+    
     rddFoldIDs = sc.parallelize(npFoldIDs).map(int) 
     
     # add the column of fold ids    
@@ -85,6 +102,7 @@ def main(sc, s3_path=s3_path, inpath=inpath, data_file=data_file,
     keep = [c for c in dfJoined.columns if c != "_2"]
     dfJoined = dfJoined.select(*keep)    
     dataWithFoldID = dfJoined.map(Parse).coalesce(nDesiredPartitions).toDF()
+    dataWithFoldID.cache()
     
     #
     start_time = time.time()
@@ -169,6 +187,10 @@ def main(sc, s3_path=s3_path, inpath=inpath, data_file=data_file,
 
         ts_lines = pred_score_ts.map(toCSVLine)
         ts_lines.saveAsTextFile((resultDir_s3 + app_name + "_pred_ts_fold" + str(iFold) + ".csv"))
+        
+    fFinished = open(resultDir_master + "finished.txt", "w")
+    fFinished.write("success." % AUC_tr)
+    fFinished.close()
 
 
 if __name__ == "__main__":
@@ -181,5 +203,5 @@ if __name__ == "__main__":
 
     sc.stop()
     
-print "Program finished successfully. "
+print("Program finished successfully. ")
 
