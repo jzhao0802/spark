@@ -240,7 +240,8 @@ if __name__ == "__main__":
 
         #output the predicted scores to S3
         avg_pred_ts.write.format("com.databricks.spark.csv")\
-            .save((resultDir_s3 +"avg_pred_ts" + isim + ".csv"),header="true")
+            .save((resultDir_s3 +"avg_pred_ts" + str(isim) + ".csv"),
+                  header="true")
 
     sc.stop()
 
