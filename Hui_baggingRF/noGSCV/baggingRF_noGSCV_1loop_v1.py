@@ -154,10 +154,10 @@ def main(sc, pos_ori, neg_ori):
         .join(dfIterIDs, "_2")\
         .drop('_2')\
         .map(Parse)\
-        .coalesce(par)\
         .toDF()\
         .drop('hae_patid')\
         .cache()
+        #.coalesce(par)\
 
     #test set is the rows in original negative cases but not in training set
     neg_ts = neg_ori.subtract(neg_tr).drop('hae_patid')

@@ -12,7 +12,7 @@
 #numdepth = [3, 4]           #number of depth, around 5
 #nodesize = [3, 5]           #node size, around 5
 #mtry = ['onethird', 'sqrt'] #mtry, select in ('auto', 'all, 'onethird', 'sqrt', 'log2')
-#fold = 2                    #number of fold, 3 or 5
+#fold = 3                    #number of fold, 3 or 5
 #par = 400                   #number of partition, usually 400, 800
 #seed = 42                   #seed in random forest model
 

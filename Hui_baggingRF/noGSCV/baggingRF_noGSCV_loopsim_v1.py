@@ -94,7 +94,7 @@ def baggingRF(iterid, neg_tr_iterid, pos_tr, ts):
         .select('patid', 'label', 'features')
 
     #combine with positive training data
-    itr = pos_tr.unionAll(ineg_tr)
+    itr = pos_tr.unionAll(ineg_tr).repartition(par)
 
     #create the labelIndexer
     #transfer to RF invalid label column
@@ -160,16 +160,16 @@ def main(sc, isim, pos_ori, neg_ori):
         .join(dfIterIDs, "_2")\
         .drop('_2')\
         .map(Parse)\
-        .coalesce(par)\
         .toDF()\
         .drop('hae_patid')\
         .cache()
+        #.coalesce(par)\
 
     #test set is the rows in original negative cases but not in training set
     neg_ts = neg_ori.subtract(neg_tr).drop('hae_patid')
 
     #combine to test data
-    ts = pos_ts.unionAll(neg_ts)
+    ts = pos_ts.unionAll(neg_ts).repartition(par)
 
     #do loops on baggingRF function
     pred_ts_ls = [baggingRF(iterid, neg_tr_iterid, pos_tr, ts) for iterid in
@@ -188,12 +188,12 @@ if __name__ == "__main__":
     pos = sqlContext.read.load((data_path + pos_file),
                           format='com.databricks.spark.csv',
                           header='true',
-                          inferSchema='true').repartition(par)
+                          inferSchema='true')
 
     neg = sqlContext.read.load((data_path + neg_file),
                           format='com.databricks.spark.csv',
                           header='true',
-                          inferSchema='true').repartition(par)
+                          inferSchema='true')
     #see the column names
     pos_col = pos.columns
     neg_col = neg.columns

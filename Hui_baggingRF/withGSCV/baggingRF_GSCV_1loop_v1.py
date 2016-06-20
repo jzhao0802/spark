@@ -46,7 +46,7 @@ numtree = [200, 300]
 numdepth = [3, 4]
 #nodesize = [3, 5] # around 5, integer
 #mtry = ['onethird', 'sqrt'] #'auto', 'all, 'onethird', 'sqrt', 'log2'
-fold = 2
+fold = 3
 par = 400
 seed = 42
 
@@ -100,9 +100,9 @@ def baggingRF(iterid, neg_tr_iterid, pos_tr, ts):
     paramGrid = ParamGridBuilder()\
         .addGrid(rf.numTrees, numtree)\
         .addGrid(rf.maxDepth, numdepth)\
+        .addGrid(rf.minInstancesPerNode, nodesize)\
+        .addGrid(rf.featureSubsetStrategy, mtry)\
         .build()
-        #.addGrid(rf.minInstancesPerNode, nodesize)\
-        #.addGrid(rf.featureSubsetStrategy, mtry)\
 
     # Create the evaluator
     evaluator = BinaryClassificationEvaluator(metricName="areaUnderPR")
@@ -161,10 +161,10 @@ def main(sc, pos_ori, neg_ori):
         .join(dfIterIDs, "_2")\
         .drop('_2')\
         .map(Parse)\
-        .coalesce(par)\
         .toDF()\
         .drop('hae_patid')\
         .cache()
+        #.coalesce(par)\
 
     #test set is the rows in original negative cases but not in training set
     neg_ts = neg_ori.subtract(neg_tr).drop('hae_patid')
