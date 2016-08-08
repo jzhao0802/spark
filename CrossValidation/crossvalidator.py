@@ -21,7 +21,9 @@ __all__ = ['CrossValidatorWithStratification']
 
 class CrossValidatorWithStratification(Estimator):
     """
-    K-fold cross validation.
+    K-fold cross validation considering data matching (every positive
+    matches the same number of negative data; every negative matches
+    with one and only one positive)
 
     >>> from pyspark.ml.classification import LogisticRegression
     >>> from pyspark.ml.evaluation import BinaryClassificationEvaluator

@@ -6,7 +6,9 @@ import unittest
 
 def AppendDataMatchingFoldIDs(data, nFolds, nDesiredPartitions="None"):
     """
-    Append a column of stratified fold IDs to the input DataFrame.
+    Select three columns ("matched_positive_id", "label", "features") 
+    and then append a column of stratified fold IDs to the input 
+    DataFrame.
 
     Parameters
     ----------
@@ -23,7 +25,9 @@ def AppendDataMatchingFoldIDs(data, nFolds, nDesiredPartitions="None"):
 
     Returns
     ----------
-    A pyspark.sql.DataFrame with a column appended to the input data
+    A pyspark.sql.DataFrame with 4 columns: three columns 
+    ("matched_positive_id", "label", "features") from the original 
+    DataFrame and a column appended to the input data
     as the fold ID. The column name of the fold ID is "foldID".
     """
     sc = SparkContext._active_spark_context
