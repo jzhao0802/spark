@@ -72,7 +72,18 @@ def PrecisionRecall_calculation(datapath, inpath, filename, response_name,\
     and call .coalesce(1) to save in a single partition
     
     Finally save the dataframe(with 3 columns i.e. threshold, precision and recall) as csv usins '.save' method."""
-    PRs = thresholds.join(labelsAndProbs)\
+    
+    cartProduct = thresholds\
+        .rdd\
+        .cartesian(labelsAndProbs.rdd)\
+        .toDF()\
+        .withColumn("threshold",col("_1").threshold)\
+        .withColumn("label", col("_2").label)\
+        .withColumn("prob", col("_2").prob)\
+        .drop("_1")\
+        .drop("_2")
+
+    PRs = cartProduct\
     	.withColumn("pred", when(col("prob") > col("threshold"),1.0).otherwise(0.0))\
     	.withColumn("bTP", when((col("label") == col("pred")) & (col("pred") == 1),1.0).otherwise(0.0))\
     	.withColumn("bFP", when((col("label") != col("pred")) & (col("pred") == 1),1.0).otherwise(0.0))\
@@ -88,31 +99,27 @@ def PrecisionRecall_calculation(datapath, inpath, filename, response_name,\
 			round(col("nTPs") / (col("nTPs") + col("nFNs") + 1e-9),3).alias("recall"),
 			col("threshold"))\
         .coalesce(1)\
+        .write\
         .save(output,"com.databricks.spark.csv",header="true")
 
 
 if __name__ == "__main__":
 
     # Some constance change here!!!!
-    datapath = "hdfs://ec2-52-90-17-145.compute-1.amazonaws.com:9000/data"
-    #"s3://emr-rwes-pa-spark-dev-datastore/Hui/shire_test/02_result/"
+    datapath = "s3://emr-rwes-pa-spark-dev-datastore/lichao.test/data/toy_data/task6/"
 
     inpath = "/"
 
     #"lasso_db4_20160627_065857/"
-    posProb_name = "Prob_1"
+    posProb_name = "pred"
     response_name = "label"
 
-    #set the command line parameters
-    flag = sys.argv[1]
-    app_name = sys.argv[2]
-
-    #filename = 'pred_ts_sim0.csv/part-00000'
-    filename = 'pred_score_ts'
+#filename = 'pred_ts_sim0.csv/part-00000'
+    filename = 'labelPred.csv'
     
     #create SparkConf
     conf = SparkConf()
-    conf.setAppName(app_name)
+    conf.setAppName("PR_calculation_test")
    
     '''conset("spark.dynamicAllocation.enabled", "true")
     conset("spark.shuffle.service.enabled", "true")

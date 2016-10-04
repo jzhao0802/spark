@@ -19,13 +19,13 @@ import datetime
 from pyspark import SparkConf, SparkContext
 from pyspark.sql import SQLContext, DataFrame
 from pyspark.sql.functions import *
-from pyspark.mllib.linalg import Vectors
+from pyspark.ml.linalg import Vectors
 import numpy as np
 #import pandas as pd
 import random
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
-from pyspark.sql.functions import monotonicallyIncreasingId
+from pyspark.sql.functions import monotonically_increasing_id
 
 from pyspark.ml import Pipeline
 from pyspark.ml.classification import RandomForestClassifier
@@ -44,15 +44,12 @@ ori_ratio = 200
 ####!!!!!change before running!!!######################################
 #path
 data_path = s3_path + "/BI_IPF_2016/01_data/"
-s3_outpath = s3_path + "/BI_IPF_2016/02_result/"
+s3_outpath = s3_path + "/lichao.test/Results/"
 master_path = "/home/lichao.wang/code/lichao/test/Results/"
-master_data_path = "/home/anaconda3/BI_IPF_ref/"
 
 # data file
 pos_file = "ipf_sample.csv"
 neg_file ="nonipf_ac_sample.csv"
-exc_file = 'vars_to_exclude.csv'
-var_file = 'var_list_sample.csv'
 
 #test proportion
 ts_prop = 0.2
@@ -212,7 +209,16 @@ def pr_curve(data, prob,resultDir_s3, output):
     #cache dataframes
     labelsAndProbs.cache()
     thresholds.cache()
-    PRs = thresholds.join(labelsAndProbs)\
+    cartProduct = thresholds\
+        .rdd\
+        .cartesian(labelsAndProbs.rdd)\
+        .toDF()\
+        .withColumn("threshold",col("_1").threshold)\
+        .withColumn("label", col("_2").label)\
+        .withColumn("prob_1", col("_2").prob_1)\
+        .drop("_1")\
+        .drop("_2")
+    PRs = cartProduct\
     	.withColumn("pred", when(col('prob_1') > col("threshold"),1.0).otherwise(0.0))\
     	.withColumn("bTP", when((col("label") == col("pred")) & (col("pred") == 1),1.0).otherwise(0.0))\
     	.withColumn("bFP", when((col("label") != col("pred")) & (col("pred") == 1),1.0).otherwise(0.0))\
@@ -227,8 +233,9 @@ def pr_curve(data, prob,resultDir_s3, output):
         .select(round(col("nTPs") / (col("nTPs") + col("nFPs") + 1e-9),3).alias("precision"),
 			round(col("nTPs") / (col("nTPs") + col("nFNs") + 1e-9),3).alias("recall"),
 			col("threshold"))\
-        .coalesce(1)\
-        .save((resultDir_s3+output),"com.databricks.spark.csv",header="true")
+        .coalesce(1).collect()
+        # .coalesce(1)\
+        # .write.save((resultDir_s3+output),"com.databricks.spark.csv",header="true")
 
 #function 8: bagging random forest
 def baggingRF(iiter, isim, tr_neg_simdata, tr_pos_simdata, tr_iterid,
@@ -285,7 +292,7 @@ def baggingRF(iiter, isim, tr_neg_simdata, tr_pos_simdata, tr_iterid,
     
         # Make predictions.
         predictions = model.transform(val_simdata)
-
+    
         #pred_scoring_sample = model.transform(scoring_sampling)
         pred_score_val = predictions.select(predictions["patid"],
                                             predictions["matched_positive_id"],
@@ -326,7 +333,7 @@ def simulation(isim, patsim, pos_ori, neg_ori):
 
     #allocate patients into training / validation
     val_simid = patsim.filter(patsim.simid == isim)
-    tr_simid = patsim.subtract(val_simid)
+    tr_simid = patsim.filter(col("simid") != isim)
 
     #join with original positive patients and negative patients
     #????not sure whether use neg_ori.join(valsimid) or the other way around????
@@ -335,13 +342,13 @@ def simulation(isim, patsim, pos_ori, neg_ori):
         .join(val_simid, val_simid["matched_positive_id"] == neg_ori["matched_positive_id"],'inner')\
         .select(neg_ori["patid"], neg_ori["label"], neg_ori["matched_positive_id"],
                 neg_ori["features"])
-    tr_neg_simdata = neg_ori.subtract(val_neg_simdata)
+    tr_neg_simdata = neg_ori.filter(col("matched_positive_id") != isim)
 
     val_pos_simdata = pos_ori\
         .join(val_simid, tr_simid["matched_positive_id"] == pos_ori["matched_positive_id"],'inner')\
         .select(pos_ori["patid"], pos_ori["label"], pos_ori["matched_positive_id"],pos_ori["features"])
 
-    tr_pos_simdata = pos_ori.subtract(val_pos_simdata)
+    tr_pos_simdata = pos_ori.filter(col("patid") != isim)
 
     #combine the validation data
     val_simdata = val_pos_simdata.unionAll(val_neg_simdata)
@@ -376,7 +383,7 @@ def simulation(isim, patsim, pos_ori, neg_ori):
     avg_pred_val.cache()
 
     #output the predicted scores to S3
-    avg_pred_val.coalesce(1).save((resultDir_s3+"avg_pred_val_sim" + str(isim) + ".csv"),
+    avg_pred_val.coalesce(1).write.save((resultDir_s3+"avg_pred_val_sim" + str(isim) + ".csv"),
                       "com.databricks.spark.csv",header="true")
 
     # AUC & AUPR
@@ -402,8 +409,7 @@ def simulation(isim, patsim, pos_ori, neg_ori):
     return avg_pred_val
 
 #function 9: main function
-def main(sc, data_path=data_path, pos_file=pos_file, neg_file=neg_file,
-         master_data_path=master_data_path, exc_file=exc_file):
+def main(sc, data_path=data_path, pos_file=pos_file, neg_file=neg_file):
 
     #reading in the data from S3
     pos = sqlContext.read.load((data_path + pos_file),
@@ -473,7 +479,7 @@ def main(sc, data_path=data_path, pos_file=pos_file, neg_file=neg_file,
     avg_pred_all.cache()
 
     #output the predicted scores to S3
-    avg_pred_all.save((resultDir_s3+"avg_pred_all.csv"),
+    avg_pred_all.write.save((resultDir_s3+"avg_pred_all.csv"),
                       "com.databricks.spark.csv",header="true")
 
     # AUC & AUPR
