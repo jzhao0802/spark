@@ -2,6 +2,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, DoubleType, IntegerType, StringType
 from pyspark.ml.feature import VectorAssembler
 from pyspark.ml.regression import LinearRegression
+from pyspark.ml.evaluation import RegressionEvaluator
 
 
 
@@ -28,9 +29,14 @@ def main():
     
     model = lr.fit(featureAssembledData)
 
-    # Print the coefficients and intercept for linear regression
-    print("Coefficients: " + str(model.coefficients))
-    print("Intercept: " + str(model.intercept))
+    # # Print the coefficients and intercept for linear regression
+    # print("Coefficients: " + str(model.coefficients))
+    # print("Intercept: " + str(model.intercept))
+    
+    prediction = model.transform(featureAssembledData)
+    
+    evaluator = RegressionEvaluator(predictionCol="prediction", labelCol="y")
+    metric = evaluator.evaluate(prediction)
     
     spark.stop()
 
