@@ -4,17 +4,38 @@ from pyspark.ml.feature import VectorAssembler
 from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 from pyspark.ml.regression import LinearRegression
 from pyspark.ml.evaluation import RegressionEvaluator
+from pyspark.sql.functions import rand
+from math import exp
+import numpy
 
-
+def addID(dataset, number, npar, name):
+    nPoses = dataset.count()
+    npFoldIDsPos = np.array(list(range(number)) * np.ceil(float(nPoses) / number))
+    # select the actual numbers of FoldIds matching the count of positive data points
+    npFoldIDs = npFoldIDsPos[:nPoses]
+    # Shuffle the foldIDs to give randomness
+    np.random.shuffle(npFoldIDs)
+    rddFoldIDs = sc.parallelize(npFoldIDs, npar).map(int)
+    dfDataWithIndex = dataset.rdd.zipWithIndex() \
+        .toDF() \
+        .withColumnRenamed("_1", "orgData")
+    dfNewKeyWithIndex = rddFoldIDs.zipWithIndex() \
+        .toDF() \
+        .withColumnRenamed("_1", "key")
+    dfJoined = dfDataWithIndex.join(dfNewKeyWithIndex, "_2") \
+        .select("orgData.matched_positive_id", 'key') \
+        .withColumnRenamed('key', name) \
+        .coalesce(npar)
+    return dfJoined
 
 def main():
     nEvalFolds = 5
     nValiFolds = 5
-    seed = 1.0
+    seed = 1
     # hyper-params
-    logLambdas = list(range(-2,3,1))
-    lambdas = exp(logLambdas)
-    alphas = list(range(0,1.01,0.1))
+    logLambdas = list(numpy.arange(-2,3,1))
+    lambdas = map(exp, logLambdas)
+    alphas = list(numpy.arange(0,1.01,0.1))
 
     dataFileName = "s3://emr-rwes-pa-spark-dev-datastore/lichao.test/data/toy_data/data_linear_regression.csv"
     spark = SparkSession\
@@ -30,7 +51,9 @@ def main():
           
     assembler = VectorAssembler(inputCols=data.columns[1:], outputCol="features")
     featureAssembledData = assembler.transform(data).select("y", "features")    
-    evalRandColAppendedData = featureAssembledData.select("*", rand(seed).alias(randCol))
+    randCol = "rand_num"    
+    # evalRandColAppendedData = featureAssembledData.select("*", rand(seed).alias(randCol))
+    evalRandColAppendedData = featureAssembledData.withColumn(randCol, rand(seed))
     
     lr = LinearRegression(maxIter=1e5, regParam=0.01, elasticNetParam=0.9, standardization=True, 
                           featuresCol="features", labelCol="y")
@@ -41,7 +64,6 @@ def main():
                .build()    
     
     h = 1.0 / nEvalFolds
-    randCol = "_rand"
     
     predictionsAllData = None
     for iFold in range(nEvalFolds):
@@ -52,7 +74,7 @@ def main():
         trainData = evalRandColAppendedData.filter(~condition)
         
         validator = CrossValidator(estimator=lr, estimatorParamMaps=paramGrid, evaluator=evaluator)
-        cvModel = cv.fit(trainData)
+        cvModel = validator.fit(trainData)
         predictions = cvModel.transform(testData)
         
         if predictionsAllData is not None:
