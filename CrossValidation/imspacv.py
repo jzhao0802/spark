@@ -1,8 +1,9 @@
 from pyspark import SparkContext
-from pyspark.ml.tuning import CrossValidator
+from pyspark.ml.tuning import CrossValidator, CrossValidatorModel
 from pyspark.ml.param import Params, Param, TypeConverters
 from pyspark.sql.functions import lit
-from pyspark import keyword_only
+from pyspark import since, keyword_only
+from pyspark.sql.types import IntegerType
 import numpy
 
 __all__ = ["CrossValidatorWithStratificationID"]
@@ -76,14 +77,15 @@ class CrossValidatorWithStratificationID(CrossValidator):
     
     def _fit(self, dataset):
         try: 
-            dfStratifyCol = dataset.select(self.stratifyCol)
+            stratifyCol = self.getOrDefault(self.stratifyCol)
+            dfStratifyCol = dataset.select(stratifyCol)
             rowsStratifyCol = dfStratifyCol.distinct().collect()
-            foldIDs = [x[self.stratifyCol] for x in rowsStratifyCol]
-            if (set(foldIDs) != set(range(max(foldIDs))))
+            foldIDs = [x[stratifyCol] for x in rowsStratifyCol]
+            if (set(foldIDs) != set(range(max(foldIDs)+1))):
                 raise ValueError("The stratifyCol column does not have zero-based consecutive integers as fold IDs.")
         except Exception as e:
-            print("Something is wrong with the stratifyCol": ")
-            print(e)
+            print("Something is wrong with the stratifyCol:")
+            raise
         
         # 
         est = self.getOrDefault(self.estimator)
@@ -93,19 +95,19 @@ class CrossValidatorWithStratificationID(CrossValidator):
         
         nFolds = dfStratifyCol.distinct().count()
         
-    
         # select features, label and foldID in order
         featuresCol = est.getFeaturesCol()
         labelCol = est.getLabelCol()
-        dataWithFoldID = dataset.select(featuresCol, labelCol, self.stratifyCol)
+        dataWithFoldID = dataset.select(featuresCol, labelCol, stratifyCol)
         
-        paramNames = [x.name for x in emp[0].keys()]
+        paramNames = [x.name for x in epm[0].keys()]
         metricValueCol = "metricValue"
         self.metricValueEveryParamSet = numpy.empty((len(epm), 2 + len(paramNames)))
+        self.metricValueEveryParamSet[:,0] = numpy.arange(len(epm))
         self.colnamesMetricValueEveryParamSet = ["paramSetID"] + paramNames + [metricValueCol]
-    
+        
         for i in range(nFolds):
-            condition = (dataWithFoldID[self.stratifyCol] == i)    
+            condition = (dataWithFoldID[stratifyCol] == i)    
             validation = dataWithFoldID.filter(condition).select(featuresCol, labelCol)
             train = dataWithFoldID.filter(~condition).select(featuresCol, labelCol)            
             
@@ -122,9 +124,9 @@ class CrossValidatorWithStratificationID(CrossValidator):
         self.metricValueEveryParamSet[:,-1] = self.metricValueEveryParamSet[:,-1] / nFolds
         
         if eva.isLargerBetter():
-            self.bestIndex = np.argmax(self.metricValueEveryParamSet[:,-1])
+            self.bestIndex = numpy.argmax(self.metricValueEveryParamSet[:,-1])
         else:
-            self.bestIndex = np.argmin(self.metricValueEveryParamSet[:,-1])
+            self.bestIndex = numpy.argmin(self.metricValueEveryParamSet[:,-1])
         
         #return the best model
         self.bestModel = est.fit(dataset, epm[self.bestIndex])
@@ -149,6 +151,103 @@ class CrossValidatorWithStratificationID(CrossValidator):
             
         # convert to pyspark.sql.DataFrame
         metricsAsList = [tuple(float(y) for y in x) for x in self.metricValueEveryParamSet]
-        df = SQLContext.getOrCreate().createDataFrame(metricsAsList, self.colnamesMetricValueEveryParamSet)
+        df = SQLContext.getOrCreate(SparkContext.getOrCreate()).createDataFrame(metricsAsList, self.colnamesMetricValueEveryParamSet)
+        df = df.withColumn(df.columns[0], df[df.columns[0]].cast(IntegerType()))
         
         return df
+
+        
+import unittest
+from pyspark.sql import SparkSession
+from pyspark.ml.regression import LinearRegression
+from pyspark.ml.evaluation import RegressionEvaluator
+from pyspark.ml.tuning import ParamGridBuilder
+from pyspark.ml.feature import VectorAssembler
+
+class CrossValidatorWithStratificationIDTests(unittest.TestCase):
+    
+    @classmethod
+    def setUpClass(cls):
+        cls.spark = SparkSession\
+                   .builder\
+                   .appName("CrossValidatorWithStratificationIDTests")\
+                   .getOrCreate()
+        dataFileName = "s3://emr-rwes-pa-spark-dev-datastore/lichao.test/data/toy_data/datasetWithFoldID.csv"
+        cls.data = spark\
+                  .read\
+                  .option("header", "true")\
+                  .option("inferSchema", "true")\
+                  .csv(dataFileName)        
+        cls.testData.cache()
+        
+        
+    @classmethod
+    def tearDownClass(cls):
+        cls.spark.stop()
+        
+    def test_CVResult(self):
+        assembler = VectorAssembler(inputCols=self.data.columns[1:(-1)], outputCol="features")
+        stratifyCol = "foldID"
+        featureAssembledData = assembler.transform(self.data).select("y", "features", stratifyCol)   
+        lr = LinearRegression(maxIter=1e5, regParam=0.01, elasticNetParam=0.9, standardization=True, 
+                              featuresCol="features", labelCol="y")
+        evaluator = RegressionEvaluator(predictionCol="prediction", labelCol="y")
+        lambdas = [0.1,1]
+        alphas = [0,0.5]
+        paramGrid = ParamGridBuilder()\
+               .addGrid(lr.regParam, lambdas)\
+               .addGrid(lr.elasticNetParam, alphas)\
+               .build()   
+        validator = CrossValidatorWithStratificationID(estimator=lr,
+                              estimatorParamMaps=paramGrid,
+                              evaluator=evaluator,
+                              stratifyCol=stratifyCol)
+        cvModel = validator.fit(featureAssembledData)
+        metrics = validator.getCVMetrics()
+        
+        
+        # one fold should have two different matched_positive_ids, the other 3
+        nMatchedPosIDs = self.GetNumDistinctMatchedPosIDs(dataWithFoldID_2)
+        self.assertTrue(\
+            (nMatchedPosIDs == [2,3]) | (nMatchedPosIDs == [3,2]),
+            "When split into 2 folds, one fold must have two distinct matched_positive_ids and the other must have 3."
+        )
+        
+        # the union of the distinct matched_positive_ids should cover all those in the data
+        setMatchedPositiveIDs = dataWithFoldID_2.select("foldID", "matched_positive_id")\
+                        .rdd\
+                        .groupByKey()\
+                        .map(lambda x: set(x[1]))\
+                        .reduce(lambda x,y: x.union(y))
+        self.assertEqual(
+            setMatchedPositiveIDs,
+            set(StratificationTests.testData.select("matched_positive_id").rdd.map(lambda x: x.matched_positive_id).collect()),
+            "The union of the distinct matched_positive_ids in all folds should cover all those in the data. "
+        )
+        
+        # one matched_positive_id for each fold
+        nFolds = 5
+        dataWithFoldID_5 = AppendDataMatchingFoldIDs(data=StratificationTests.testData, nFolds=nFolds)
+        nMatchedPosIDs = self.GetNumDistinctMatchedPosIDs(dataWithFoldID_5)
+        self.assertTrue(\
+            nMatchedPosIDs == [1]*5,
+            "When split into 5 folds, one fold must have only one distinct matched_positive_ids."
+        )        
+        
+        # two matched_positive_ids for each fold
+        nFolds = 2
+        dataWithFoldID_22 = \
+            AppendDataMatchingFoldIDs(\
+                data=StratificationTests.testData.filter(StratificationTests.testData.matched_positive_id != 0), 
+                nFolds=nFolds
+            )
+        nMatchedPosIDs = self.GetNumDistinctMatchedPosIDs(dataWithFoldID_22)
+        self.assertTrue(\
+            nMatchedPosIDs == [2]*2,
+            "Now the data has only 4 distinct values for matched_positive_ids. When split into 2 folds, each fold should have 2 distinct values."
+        )
+            
+if __name__ == "__main__":
+    
+    unittest.main()
+    
