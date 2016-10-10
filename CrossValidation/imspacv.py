@@ -22,7 +22,7 @@ def _write_to_np_MetricValueEveryParamSet(metricValueEveryParamSet,
             print("Error! " + paramName + " doesn't exist in the list of hyper-parameter names colnamesMetricValueEveryParamSet.")
         metricValueEveryParamSet[j, colID] = paramVal
         
-    metricValueEveryParamSet[j, -1] = metric
+    metricValueEveryParamSet[j, -1] += metric
     
     return metricValueEveryParamSet
     
@@ -104,6 +104,7 @@ class CrossValidatorWithStratificationID(CrossValidator):
         metricValueCol = "metricValue"
         self.metricValueEveryParamSet = numpy.empty((len(epm), 2 + len(paramNames)))
         self.metricValueEveryParamSet[:,0] = numpy.arange(len(epm))
+        self.metricValueEveryParamSet[:,-1] = 0
         self.colnamesMetricValueEveryParamSet = ["paramSetID"] + paramNames + [metricValueCol]
         
         for i in range(nFolds):
@@ -173,12 +174,12 @@ class CrossValidatorWithStratificationIDTests(unittest.TestCase):
                    .appName("CrossValidatorWithStratificationIDTests")\
                    .getOrCreate()
         dataFileName = "s3://emr-rwes-pa-spark-dev-datastore/lichao.test/data/toy_data/datasetWithFoldID.csv"
-        cls.data = spark\
+        cls.data = cls.spark\
                   .read\
                   .option("header", "true")\
                   .option("inferSchema", "true")\
                   .csv(dataFileName)        
-        cls.testData.cache()
+        cls.data.cache()
         
         
     @classmethod
@@ -189,11 +190,13 @@ class CrossValidatorWithStratificationIDTests(unittest.TestCase):
         assembler = VectorAssembler(inputCols=self.data.columns[1:(-1)], outputCol="features")
         stratifyCol = "foldID"
         featureAssembledData = assembler.transform(self.data).select("y", "features", stratifyCol)   
-        lr = LinearRegression(maxIter=1e5, regParam=0.01, elasticNetParam=0.9, standardization=True, 
+        lr = LinearRegression(maxIter=1e5, standardization=True, 
                               featuresCol="features", labelCol="y")
         evaluator = RegressionEvaluator(predictionCol="prediction", labelCol="y")
         lambdas = [0.1,1]
         alphas = [0,0.5]
+        # lambdas = [0.1]
+        # alphas = [0]
         paramGrid = ParamGridBuilder()\
                .addGrid(lr.regParam, lambdas)\
                .addGrid(lr.elasticNetParam, alphas)\
@@ -205,47 +208,6 @@ class CrossValidatorWithStratificationIDTests(unittest.TestCase):
         cvModel = validator.fit(featureAssembledData)
         metrics = validator.getCVMetrics()
         
-        
-        # one fold should have two different matched_positive_ids, the other 3
-        nMatchedPosIDs = self.GetNumDistinctMatchedPosIDs(dataWithFoldID_2)
-        self.assertTrue(\
-            (nMatchedPosIDs == [2,3]) | (nMatchedPosIDs == [3,2]),
-            "When split into 2 folds, one fold must have two distinct matched_positive_ids and the other must have 3."
-        )
-        
-        # the union of the distinct matched_positive_ids should cover all those in the data
-        setMatchedPositiveIDs = dataWithFoldID_2.select("foldID", "matched_positive_id")\
-                        .rdd\
-                        .groupByKey()\
-                        .map(lambda x: set(x[1]))\
-                        .reduce(lambda x,y: x.union(y))
-        self.assertEqual(
-            setMatchedPositiveIDs,
-            set(StratificationTests.testData.select("matched_positive_id").rdd.map(lambda x: x.matched_positive_id).collect()),
-            "The union of the distinct matched_positive_ids in all folds should cover all those in the data. "
-        )
-        
-        # one matched_positive_id for each fold
-        nFolds = 5
-        dataWithFoldID_5 = AppendDataMatchingFoldIDs(data=StratificationTests.testData, nFolds=nFolds)
-        nMatchedPosIDs = self.GetNumDistinctMatchedPosIDs(dataWithFoldID_5)
-        self.assertTrue(\
-            nMatchedPosIDs == [1]*5,
-            "When split into 5 folds, one fold must have only one distinct matched_positive_ids."
-        )        
-        
-        # two matched_positive_ids for each fold
-        nFolds = 2
-        dataWithFoldID_22 = \
-            AppendDataMatchingFoldIDs(\
-                data=StratificationTests.testData.filter(StratificationTests.testData.matched_positive_id != 0), 
-                nFolds=nFolds
-            )
-        nMatchedPosIDs = self.GetNumDistinctMatchedPosIDs(dataWithFoldID_22)
-        self.assertTrue(\
-            nMatchedPosIDs == [2]*2,
-            "Now the data has only 4 distinct values for matched_positive_ids. When split into 2 folds, each fold should have 2 distinct values."
-        )
             
 if __name__ == "__main__":
     
