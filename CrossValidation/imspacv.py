@@ -1,4 +1,5 @@
 from pyspark import SparkContext
+from pyspark.sql import SQLContext
 from pyspark.ml.tuning import CrossValidator, CrossValidatorModel
 from pyspark.ml.param import Params, Param, TypeConverters
 from pyspark.sql.functions import lit
@@ -205,7 +206,7 @@ class CrossValidatorWithStratificationIDTests(unittest.TestCase):
                               evaluator=evaluator,
                               stratifyCol=stratifyCol)
         cvModel = validator.fit(featureAssembledData)
-        metrics = validator.getCVMetrics()
+        metrics = validator.getCVMetrics().drop("paramSetID")
         collectedMetrics = metrics.collect()
         def localRoundMetricValue(rr):
             rrAsDict = rr.asDict()
@@ -217,10 +218,10 @@ class CrossValidatorWithStratificationIDTests(unittest.TestCase):
         strMetrics = set([localConvertDictToStr(x) for x in roundedMetrics])
         
         expectedMetrics = set([\
-            "regParam:0.1;elasticNetParam:0.0;paramSetID:0;metricValue:1.087;",
-            "regParam:1.0;elasticNetParam:0.0;paramSetID:1;metricValue:1.052;",
-            "regParam:0.1;elasticNetParam:0.5;paramSetID:2;metricValue:1.06;",
-            "regParam:1.0;elasticNetParam:0.5;paramSetID:3;metricValue:1.069;"
+            "regParam:0.1;elasticNetParam:0.0;metricValue:1.087;",
+            "regParam:1.0;elasticNetParam:0.0;metricValue:1.052;",
+            "regParam:0.1;elasticNetParam:0.5;metricValue:1.06;",
+            "regParam:1.0;elasticNetParam:0.5;metricValue:1.069;"
         ])
         
         self.assertEqual(strMetrics, expectedMetrics, "Incorrect list of evaluation metric values for all hyper-parameter sets.")
