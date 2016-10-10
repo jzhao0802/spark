@@ -164,6 +164,7 @@ from pyspark.ml.regression import LinearRegression
 from pyspark.ml.evaluation import RegressionEvaluator
 from pyspark.ml.tuning import ParamGridBuilder
 from pyspark.ml.feature import VectorAssembler
+from pyspark.sql import Row
 
 class CrossValidatorWithStratificationIDTests(unittest.TestCase):
     
@@ -195,8 +196,6 @@ class CrossValidatorWithStratificationIDTests(unittest.TestCase):
         evaluator = RegressionEvaluator(predictionCol="prediction", labelCol="y")
         lambdas = [0.1,1]
         alphas = [0,0.5]
-        # lambdas = [0.1]
-        # alphas = [0]
         paramGrid = ParamGridBuilder()\
                .addGrid(lr.regParam, lambdas)\
                .addGrid(lr.elasticNetParam, alphas)\
@@ -207,6 +206,27 @@ class CrossValidatorWithStratificationIDTests(unittest.TestCase):
                               stratifyCol=stratifyCol)
         cvModel = validator.fit(featureAssembledData)
         metrics = validator.getCVMetrics()
+        collectedMetrics = metrics.collect()
+        def localRoundMetricValue(rr):
+            rrAsDict = rr.asDict()
+            rrAsDict["metricValue"] = round(rrAsDict["metricValue"], 3)
+            return rrAsDict
+        roundedMetrics = [localRoundMetricValue(x) for x in collectedMetrics]
+        def localConvertDictToStr(dd):
+            return "".join("{}:{};".format(key,value) for key, value in dd.items())
+        strMetrics = set([localConvertDictToStr(x) for x in roundedMetrics])
+        
+        expectedMetrics = set([\
+            "regParam:0.1;elasticNetParam:0.0;paramSetID:0;metricValue:1.087;",
+            "regParam:1.0;elasticNetParam:0.0;paramSetID:1;metricValue:1.052;",
+            "regParam:0.1;elasticNetParam:0.5;paramSetID:2;metricValue:1.06;",
+            "regParam:1.0;elasticNetParam:0.5;paramSetID:3;metricValue:1.069;"
+        ])
+        
+        self.assertEqual(strMetrics, expectedMetrics, "Incorrect list of evaluation metric values for all hyper-parameter sets.")
+        
+        bestParams = validator.getBestModelParams()
+        self.assertEqual(bestParams, {'regParam': 1, 'elasticNetParam': 0}, "Incorrect best parameters.")
         
             
 if __name__ == "__main__":
