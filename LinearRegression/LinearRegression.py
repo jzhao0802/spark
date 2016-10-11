@@ -8,6 +8,8 @@ from pyspark.sql.functions import rand
 from math import exp
 import numpy
 import os
+import time
+import datetime
 from imspacv import CrossValidatorWithStratificationID
 
 def main():
@@ -30,7 +32,11 @@ def main():
     # user to specify: the column name for prediction
     predictionCol = "prediction"
     # user to specify: the output location on s3
-    resultDir_s3 = "s3://emr-rwes-pa-spark-dev-datastore/lichao.test/Results/tmp/"    
+    start_time = time.time()
+    st = datetime.datetime.fromtimestamp(start_time).strftime('%Y%m%d_%H%M%S')
+    resultDir_s3 = "s3://emr-rwes-pa-spark-dev-datastore/lichao.test/Results/" + st + "/"
+    # user to specify the output location on master
+    resultDir_master = "/home/lichao.wang/code/lichao/test/Results/" + st + "/"
     
     # sanity check
     if outerFoldCol not in data.columns:
@@ -62,6 +68,8 @@ def main():
     
     if not os.path.exists(resultDir_s3):
         os.makedirs(resultDir_s3, 0777)
+    if not os.path.exists(resultDir_master):
+        os.makedirs(resultDir_master, 0777)
         
     for iFold in range(nEvalFolds):
         condition = featureAssembledData[outerFoldCol] == iFold
@@ -84,23 +92,25 @@ def main():
             
         # save the metrics for all hyper-parameter sets in cv
         cvMetrics = validator.getCVMetrics()
-        cvMetrics.write.csv(resultDir_s3 + "cvMetricsFold" + str(iFold), mode="overwrite")
+        cvMetricsFileName = resultDir_s3 + "cvMetricsFold" + str(iFold)
+        cvMetrics.coalesce(4).write.csv(cvMetricsFileName, header="true")
         # save the hyper-parameters of the best model
         bestParams = validator.getBestModelParams()
-        fileBestParams = open(resultDir_s3 + "bestParamsFold" + str(iFold) + ".txt", "w")
+        fileBestParams = open(resultDir_master + "bestParamsFold" + str(iFold) + ".txt", "w")
         fileBestParams.writelines(str(bestParams))
         fileBestParams.close()
         # save coefficients of the best model
-        fileCoef = open(resultDir_s3 + "coefsFold" + str(iFold) + ".txt", "w")
-        fileCoef.writelines("Intercept: {}".format(str(cvModel.bestModel.intercept)))
-        fileCoef.writelines("Coefficients: {}".format(str(cvModel.bestModel.coefficients)))
+        fileCoef = open(resultDir_master + "coefsFold" + str(iFold) + ".txt", "w")
+        fileCoef.writelines("Intercept: {}\n".format(str(cvModel.bestModel.intercept)))
+        fileCoef.writelines("Coefficients: {}\n".format(str(cvModel.bestModel.coefficients)))
         fileCoef.close()        
     
     # save all predictions
-    predictionsAllData.write.csv(resultDir_s3 + "predictionsAllData", mode="overwrite")
+    predictionsFileName = resultDir_s3 + "predictionsAllData"
+    predictionsAllData.select(orgOutputCol, predictionCol).write.csv(predictionsFileName, header="true")
     # save rmse
     rmse = evaluator.evaluate(predictionsAllData)
-    fileRMSE = open(resultDir_s3 + "rmse.txt", "w")
+    fileRMSE = open(resultDir_master + "rmse.txt", "w")
     fileRMSE.writelines("rmse: {}".format(rmse))
     fileRMSE.close()
     
