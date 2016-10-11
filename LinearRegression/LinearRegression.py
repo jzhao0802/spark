@@ -11,9 +11,8 @@ from imspacv import CrossValidatorWithStratificationID
 
 def main():
     # user to specify: hyper-params
-    logLambdas = list(numpy.arange(-2,3,1))
-    lambdas = map(exp, logLambdas)
-    alphas = list(numpy.arange(0,1.01,0.1))
+    lambdas = [0.1, 1]
+    alphas = [0, 0.5]
     # user to specify: input data location
     dataFileName = "s3://emr-rwes-pa-spark-dev-datastore/lichao.test/data/toy_data/data_LinearRegressionTemplate.csv"
     # read data    
@@ -45,7 +44,7 @@ def main():
     
     # convert to ml-compatible format
     assembler = VectorAssembler(inputCols=orgPredictorCols, outputCol=collectivePredictorCol)
-    featureAssembledData = assembler.transform(data).select(orgOutputCol, collectivePredictorCol)    
+    featureAssembledData = assembler.transform(data).select(orgOutputCol, collectivePredictorCol, outerFoldCol, innerFoldCol)    
     
     
     # the model (pipeline)
@@ -65,8 +64,8 @@ def main():
         
     for iFold in range(nEvalFolds):
         condition = featureAssembledData[outerFoldCol] == iFold
-        testData = evalRandColAppendedData.filter(condition)
-        trainData = evalRandColAppendedData.filter(~condition)
+        testData = featureAssembledData.filter(condition)
+        trainData = featureAssembledData.filter(~condition)
         
         validator = CrossValidatorWithStratificationID(\
                         estimator=lr, 
@@ -84,15 +83,20 @@ def main():
             
         # save the metrics for all hyper-parameter sets in cv
         cvMetrics = validator.getCVMetrics()
-        cvMetrics.write.csv(resultDir_s3 + "cvMetricsFold" + str(iFold) + ".csv")
-        # save model coefficients
+        cvMetrics.write.csv(resultDir_s3 + "cvMetricsFold" + str(iFold))
+        # save the hyper-parameters of the best model
+        bestParams = validator.getBestModelParams()
+        fileBestParams = open(resultDir_s3 + "bestParamsFold" + str(iFold) + ".txt", "w")
+        fileBestParams.writeLines(str(bestParams))
+        fileBestParams.close()
+        # save coefficients of the best model
         fileCoef = open(resultDir_s3 + "coefsFold" + str(iFold) + ".txt", "w")
-        fileCoef.writelines("Intercept: {}".format(str(cvModel.intercept)))
-        fileCoef.writeLines("Coefficients: {}".format(str(cvModel.coefficients)))
+        fileCoef.writelines("Intercept: {}".format(str(cvModel.bestModel.intercept)))
+        fileCoef.writeLines("Coefficients: {}".format(str(cvModel.bestModel.coefficients)))
         fileCoef.close()        
     
     # save all predictions
-    predictionsAllData.write.csv(resultDir_s3 + "predictionsAllData.csv")
+    predictionsAllData.write.csv(resultDir_s3 + "predictionsAllData")
     # save rmse
     rmse = evaluator.evaluate(predictionsAllData)
     fileRMSE = open(resultDir_s3 + "rmse.txt", "w")
