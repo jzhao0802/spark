@@ -7,6 +7,7 @@ from pyspark.ml.evaluation import RegressionEvaluator
 from pyspark.sql.functions import rand
 from math import exp
 import numpy
+import os
 from imspacv import CrossValidatorWithStratificationID
 
 def main():
@@ -83,20 +84,20 @@ def main():
             
         # save the metrics for all hyper-parameter sets in cv
         cvMetrics = validator.getCVMetrics()
-        cvMetrics.write.csv(resultDir_s3 + "cvMetricsFold" + str(iFold))
+        cvMetrics.write.csv(resultDir_s3 + "cvMetricsFold" + str(iFold), mode="overwrite")
         # save the hyper-parameters of the best model
         bestParams = validator.getBestModelParams()
         fileBestParams = open(resultDir_s3 + "bestParamsFold" + str(iFold) + ".txt", "w")
-        fileBestParams.writeLines(str(bestParams))
+        fileBestParams.writelines(str(bestParams))
         fileBestParams.close()
         # save coefficients of the best model
         fileCoef = open(resultDir_s3 + "coefsFold" + str(iFold) + ".txt", "w")
         fileCoef.writelines("Intercept: {}".format(str(cvModel.bestModel.intercept)))
-        fileCoef.writeLines("Coefficients: {}".format(str(cvModel.bestModel.coefficients)))
+        fileCoef.writelines("Coefficients: {}".format(str(cvModel.bestModel.coefficients)))
         fileCoef.close()        
     
     # save all predictions
-    predictionsAllData.write.csv(resultDir_s3 + "predictionsAllData")
+    predictionsAllData.write.csv(resultDir_s3 + "predictionsAllData", mode="overwrite")
     # save rmse
     rmse = evaluator.evaluate(predictionsAllData)
     fileRMSE = open(resultDir_s3 + "rmse.txt", "w")
