@@ -10,7 +10,7 @@ import time
 import datetime
 from pyspark import SparkConf, SparkContext
 from pyspark.sql import SQLContext
-from pyspark.mllib.linalg import Vectors
+from pyspark.ml.linalg import Vectors
 import numpy as np
 
 #from pyspark.ml import Pipeline
@@ -21,7 +21,7 @@ from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 
 # Some constance
 data_path = 's3://emr-rwes-pa-spark-dev-datastore/'
-master_path = "/home/zwang/test_codes/Results/"
+master_path = "/home/lichao.wang/code/lichao/test/Results/"
 tr_file = 'tr_patid.csv'
 ts_file = 'ts_patid.csv'
 app_name = 'Lasoo_model'
@@ -98,7 +98,7 @@ def main(sc, app_name=app_name,
     #output the parameters to results folder
     head = header.split(",")
     intercept = cvModel.bestModel.intercept
-    coef = cvModel.bestModel.weights
+    coef = cvModel.bestModel.coefficients
     coef_file = open(resultDir_master + app_name + '_Coef.txt', "w")
     coef_file.writelines("Intercept, %f" %intercept)
     coef_file.writelines("\n")
@@ -128,9 +128,9 @@ def main(sc, app_name=app_name,
     auc_file.close()
         
     #output results to S3
-    tr_lines = pred_score_tr.map(toCSVLine)
+    tr_lines = pred_score_tr.rdd.map(toCSVLine)
     tr_lines.saveAsTextFile((resultDir_s3 + app_name + '_pred_tr'))
-    ts_lines = pred_score_ts.map(toCSVLine)
+    ts_lines = pred_score_ts.rdd.map(toCSVLine)
     ts_lines.saveAsTextFile((resultDir_s3 + app_name + '_pred_ts'))
     
 if __name__ == "__main__":

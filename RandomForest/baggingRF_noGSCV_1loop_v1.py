@@ -16,7 +16,7 @@ import datetime
 from pyspark import SparkConf, SparkContext
 from pyspark.sql import SQLContext
 from pyspark.sql.functions import *
-from pyspark.mllib.linalg import Vectors
+from pyspark.ml.linalg import Vectors
 import numpy as np
 from pyspark.sql.functions import *
 from pyspark.sql.types import DoubleType
@@ -28,7 +28,7 @@ from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClass
 
 #constants variables
 app_name = sys.argv[1]
-path = "s3://emr-rwes-pa-spark-dev-datastore/Hui/shire_test"
+path = "s3://emr-rwes-pa-spark-dev-datastore/lichao.test/shire_test"
 data_path = path + "/01_data/data_973"
 pos_file = "/dat_hae.csv"
 neg_file ="/dat_nonhae.csv"
@@ -101,32 +101,32 @@ def sqlqu(nIter):
 
 #function 6: bagging random forest
 def baggingRF(iterid, neg_tr_iterid, pos_tr, ts):
-
+    
     #select the Non-HAE patient by iteration ID
     ineg_tr = neg_tr_iterid\
         .filter(neg_tr_iterid.iterid == iterid)\
         .select('patid', 'label', 'features')
-
+    
     #combine with positive training data
     itr = pos_tr.unionAll(ineg_tr)
-
+    
     #create the labelIndexer
     #transfer to RF invalid label column
     labelIndexer = StringIndexer(inputCol="label",outputCol="indexedLabel").fit(itr)
-
+    
     # Train a RandomForest model.
     rf = RandomForestClassifier(labelCol="indexedLabel",
                                 maxDepth=numDepth, numTrees=numTrees, seed=seed)
-
+    
     # Chain indexers and forest in a Pipeline
     pipeline = Pipeline(stages=[labelIndexer, rf])
-
+    
     # Train model.  This also runs the indexers.
     model = pipeline.fit(itr)
-
+    
     # Make predictions.
     predictions = model.transform(ts)
-
+    
     pred_score_ts = predictions.select(
             predictions.patid, predictions.label,
             getitem(0)('probability').alias('prob_0'),
@@ -143,6 +143,7 @@ def main(sc, pos_ori, neg_ori, path=path):
 
     #random split in positive cases and use HAE patient ID to select Non-HAE
     (pos_tr, pos_ts) = pos_ori.randomSplit([(1-ts_prop), ts_prop])
+    list_pos_ts_ids = [int(x.asDict()["patid"]) for x in pos_ts.select("patid").collect()]
 
     #using HAE patient ID to select Non-HAE patient and only keep Non-HAE
     neg_tr = neg_ori\
@@ -172,24 +173,24 @@ def main(sc, pos_ori, neg_ori, path=path):
     neg_tr_iterid = neg_tr_Indexed\
         .join(dfIterIDs, "_2")\
         .drop('_2')\
-        .map(Parse)\
+        .rdd.map(Parse)\
         .coalesce(par)\
         .toDF()\
         .drop('hae_patid')\
         .cache()
 
     #test set is the rows in original negative cases but not in training set
-    neg_ts = neg_ori\
-        .subtract(neg_tr)\
-        .drop('hae_patid')
+    neg_ts = neg_ori.filter(col("hae_patid").isin(list_pos_ts_ids)).drop("hae_patid")
+    # neg_ts = neg_ori\
+        # .subtract(neg_tr)\
+        # .drop('hae_patid')
 
     #combine to test data
     ts = pos_ts.unionAll(neg_ts)
 
     #ts_patid = ts.select('patid', 'label')
     #do loops on baggingRF function
-    pred_ts_ls = [baggingRF(iterid, neg_tr_iterid, pos_tr, ts) for iterid in
-                  range(nIter)]
+    pred_ts_ls = [baggingRF(iterid, neg_tr_iterid, pos_tr, ts) for iterid in range(nIter)]
     return pred_ts_ls
 
 
@@ -219,7 +220,7 @@ if __name__ == "__main__":
     avg_pred_ts = sqlContext.sql(sql_query)
 
     #map each row as CSV line
-    avg_pred_ts_line = avg_pred_ts.map(toCSVLine)
+    avg_pred_ts_line = avg_pred_ts.rdd.map(toCSVLine)
 
     #output the predicted scores to S3
     avg_pred_ts_line.saveAsTextFile((resultDir_s3 + "avg_pred_ts.csv" ))

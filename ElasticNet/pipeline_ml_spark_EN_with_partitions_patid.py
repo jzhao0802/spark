@@ -14,7 +14,7 @@ import time
 import datetime
 from pyspark import SparkConf, SparkContext
 from pyspark.sql import SQLContext
-from pyspark.mllib.linalg import Vectors
+from pyspark.ml.linalg import Vectors
 import numpy as np
 
 #from pyspark.ml import Pipeline
@@ -27,11 +27,11 @@ from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 
 # Some constance
 data_path = 's3://emr-rwes-pa-spark-dev-datastore/'
-master_path = "/home/zwang/test_codes/Results/"
-tr_file = 'data_forModel.csv'
-ts_file = 'data_forModel.csv'
-app_name = 'LR_Hyper_CV_simple'
-inpath = 'zy_test/model_data/'
+master_path = "/home/lichao.wang/code/lichao/test/Results/"
+tr_file = 'tr_patid.csv'
+ts_file = 'ts_patid.csv'
+app_name = 'ElasticNet_model'
+inpath = 'Shire_test/200k_patid/'
 # For lambda
 lambdastart = float(0.1)
 lambdastop = float(1)
@@ -124,7 +124,7 @@ def main(sc, app_name=app_name,
     #output the parameters to results folder
     head = header.split(",")
     intercept = cvModel.bestModel.intercept
-    coef = cvModel.bestModel.weights
+    coef = cvModel.bestModel.coefficients
     coef_file = open(resultDir_master + app_name + '_Coef.txt', "w")
     coef_file.writelines("Intercept, %f" %intercept)
     coef_file.writelines("\n")
@@ -182,9 +182,9 @@ def main(sc, app_name=app_name,
         pred_score_ts1 = pred_score_ts1.withColumnRenamed('p2','Prob_1')
  
     #output results to S3
-    tr_lines = pred_score_tr1.map(toCSVLine)
+    tr_lines = pred_score_tr1.rdd.map(toCSVLine)
     tr_lines.saveAsTextFile((resultDir_s3 + app_name + '_pred_tr'))
-    ts_lines = pred_score_ts1.map(toCSVLine)
+    ts_lines = pred_score_ts1.rdd.map(toCSVLine)
     ts_lines.saveAsTextFile((resultDir_s3 + app_name + '_pred_ts'))
     
 if __name__ == "__main__":

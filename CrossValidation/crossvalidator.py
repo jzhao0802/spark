@@ -6,7 +6,7 @@ import numpy as np
 from pyspark import SparkContext
 from pyspark.ml.param import Params, Param
 from pyspark.ml import Estimator
-from pyspark.ml.util import keyword_only
+from pyspark import keyword_only
 from pyspark.ml.tuning import CrossValidatorModel
 from pyspark.ml.feature import StringIndexer
 from pyspark.sql.functions import *
