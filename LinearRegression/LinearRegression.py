@@ -7,6 +7,7 @@ from pyspark.ml.evaluation import RegressionEvaluator
 from pyspark.sql.functions import rand
 from math import exp
 import numpy
+from imspacv import CrossValidatorWithStratificationID
 
 def main():
     # user to specify: hyper-params
@@ -28,6 +29,8 @@ def main():
     collectivePredictorCol = "features"
     # user to specify: the column name for prediction
     predictionCol = "prediction"
+    # user to specify: the output location on s3
+    resultDir_s3 = "s3://emr-rwes-pa-spark-dev-datastore/lichao.test/Results/tmp/"    
     
     # sanity check
     if outerFoldCol not in data.columns:
@@ -53,15 +56,24 @@ def main():
                .addGrid(lr.elasticNetParam, alphas)\
                .build()    
     
+    # cross-evaluation
+    nEvalFolds = len(set(listUniqueOutFoldIDs))        
     predictionsAllData = None
+    
+    if not os.path.exists(resultDir_s3):
+        os.makedirs(resultDir_s3, 0777)
+        
     for iFold in range(nEvalFolds):
-        lb = iFold * h
-        ub = (iFold + 1) * h
-        condition = (evalRandColAppendedData[randCol] >= lb) & (evalRandColAppendedData[randCol] < ub)
+        condition = featureAssembledData[outerFoldCol] == iFold
         testData = evalRandColAppendedData.filter(condition)
         trainData = evalRandColAppendedData.filter(~condition)
         
-        validator = CrossValidator(estimator=lr, estimatorParamMaps=paramGrid, evaluator=evaluator)
+        validator = CrossValidatorWithStratificationID(\
+                        estimator=lr, 
+                        estimatorParamMaps=paramGrid, 
+                        evaluator=evaluator, 
+                        stratifyCol=innerFoldCol\
+                    )
         cvModel = validator.fit(trainData)
         predictions = cvModel.transform(testData)
         
@@ -69,9 +81,23 @@ def main():
             predictionsAllData = predictionsAllData.unionAll(predictions)
         else:
             predictionsAllData = predictions
+            
+        # save the metrics for all hyper-parameter sets in cv
+        cvMetrics = validator.getCVMetrics()
+        cvMetrics.write.csv(resultDir_s3 + "cvMetricsFold" + str(iFold) + ".csv")
+        # save model coefficients
+        fileCoef = open(resultDir_s3 + "coefsFold" + str(iFold) + ".txt", "w")
+        fileCoef.writelines("Intercept: {}".format(str(cvModel.intercept)))
+        fileCoef.writeLines("Coefficients: {}".format(str(cvModel.coefficients)))
+        fileCoef.close()        
     
+    # save all predictions
+    predictionsAllData.write.csv(resultDir_s3 + "predictionsAllData.csv")
+    # save rmse
     rmse = evaluator.evaluate(predictionsAllData)
-    print("Final rmse: {}".format(rmse))
+    fileRMSE = open(resultDir_s3 + "rmse.txt", "w")
+    fileRMSE.writelines("rmse: {}".format(rmse))
+    fileRMSE.close()
     
     spark.stop()
 
