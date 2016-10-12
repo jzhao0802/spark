@@ -32,6 +32,32 @@ class CrossValidatorWithStratificationID(CrossValidator):
     """
     Similar to the built-in pyspark.ml.tuning.CrossValidator, but the stratification will be done
     according to the fold IDs in a column of the input data. 
+    
+    >>> from pyspark.ml.classification import LogisticRegression
+    >>> from pyspark.ml.evaluation import BinaryClassificationEvaluator
+    >>> from pyspark.ml.linalg import Vectors
+    >>> dataset = spark.createDataFrame(
+    ...     [(Vectors.dense([0.0]), 0.0, 0),
+    ...      (Vectors.dense([0.4]), 1.0, 1),
+    ...      (Vectors.dense([0.5]), 0.0, 2),
+    ...      (Vectors.dense([0.6]), 1.0, 3),
+    ...      (Vectors.dense([1.0]), 1.0, 4)] * 10,
+    ...     ["features", "label", "foldID"])
+    >>> lr = LogisticRegression()
+    >>> grid = ParamGridBuilder().addGrid(lr.maxIter, [0, 1]).build()
+    >>> evaluator = BinaryClassificationEvaluator()
+    >>> cv = CrossValidator(estimator=lr, estimatorParamMaps=grid, evaluator=evaluator, stratifyCol="foldID")
+    >>> cvModel = cv.fit(dataset)
+    >>> cvModel.avgMetrics.show()
+    +----------+-------+-----------+
+    |paramSetID|maxIter|metricValue|
+    +----------+-------+-----------+
+    |         0|    0.0|        0.6|
+    |         1|    1.0|        0.6|
+    +----------+-------+-----------+
+    >>> evaluator.evaluate(cvModel.transform(dataset))
+    0.5
+    
     """
     
     # a placeholder to make it appear in the generated doc
