@@ -91,7 +91,7 @@ def main():
             predictionsAllData = predictions
             
         # save the metrics for all hyper-parameter sets in cv
-        cvMetrics = validator.getCVMetrics()
+        cvMetrics = cvModel.avgMetrics
         cvMetricsFileName = resultDir_s3 + "cvMetricsFold" + str(iFold)
         cvMetrics.coalesce(4).write.csv(cvMetricsFileName, header="true")
         # save the hyper-parameters of the best model
