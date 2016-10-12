@@ -46,8 +46,6 @@ class CrossValidatorWithStratificationID(CrossValidator):
             raise ValueError("stratifyCol must be specified.")        
         super(CrossValidatorWithStratificationID, self).__init__()
         self.bestIndex = None
-        self.metricValueEveryParamSet = None
-        self.colnamesMetricValueEveryParamSet = None
         kwargs = self.__init__._input_kwargs
         self._set(**kwargs)
         
@@ -103,10 +101,10 @@ class CrossValidatorWithStratificationID(CrossValidator):
         
         paramNames = [x.name for x in epm[0].keys()]
         metricValueCol = "metricValue"
-        self.metricValueEveryParamSet = numpy.empty((len(epm), 2 + len(paramNames)))
-        self.metricValueEveryParamSet[:,0] = numpy.arange(len(epm))
-        self.metricValueEveryParamSet[:,-1] = 0
-        self.colnamesMetricValueEveryParamSet = ["paramSetID"] + paramNames + [metricValueCol]
+        metricValueEveryParamSet = numpy.empty((len(epm), 2 + len(paramNames)))
+        metricValueEveryParamSet[:,0] = numpy.arange(len(epm))
+        metricValueEveryParamSet[:,-1] = 0
+        colnamesMetricValueEveryParamSet = ["paramSetID"] + paramNames + [metricValueCol]
         
         for i in range(nFolds):
             condition = (dataWithFoldID[stratifyCol] == i)    
@@ -118,21 +116,25 @@ class CrossValidatorWithStratificationID(CrossValidator):
                 # TODO: duplicate evaluator to take extra params from input
                 metric = eva.evaluate(model.transform(validation, epm[j]))
                 
-                self.metricValueEveryParamSet = \
-                    _write_to_np_MetricValueEveryParamSet(self.metricValueEveryParamSet, 
-                                                          self.colnamesMetricValueEveryParamSet, 
+                metricValueEveryParamSet = \
+                    _write_to_np_MetricValueEveryParamSet(metricValueEveryParamSet, 
+                                                          colnamesMetricValueEveryParamSet, 
                                                           j, epm[j], metric)               
         
-        self.metricValueEveryParamSet[:,-1] = self.metricValueEveryParamSet[:,-1] / nFolds
+        metricValueEveryParamSet[:,-1] = metricValueEveryParamSet[:,-1] / nFolds
         
         if eva.isLargerBetter():
-            self.bestIndex = numpy.argmax(self.metricValueEveryParamSet[:,-1])
+            self.bestIndex = numpy.argmax(metricValueEveryParamSet[:,-1])
         else:
-            self.bestIndex = numpy.argmin(self.metricValueEveryParamSet[:,-1])
+            self.bestIndex = numpy.argmin(metricValueEveryParamSet[:,-1])
         
         #return the best model
         self.bestModel = est.fit(dataset, epm[self.bestIndex])
-        return CrossValidatorModel(self.bestModel)
+        # convert numpy.ndarray to pyspark.sql.DataFrame
+        metricsAsList = [tuple(float(y) for y in x) for x in metricValueEveryParamSet]
+        df = SQLContext.getOrCreate(SparkContext.getOrCreate()).createDataFrame(metricsAsList, colnamesMetricValueEveryParamSet)
+        df = df.withColumn(df.columns[0], df[df.columns[0]].cast(IntegerType())).select(colnamesMetricValueEveryParamSet)
+        return CrossValidatorModel(self.bestModel, df)
         
     #returns the hyperparameters of the best model chosen by the cross validator
     def getBestModelParams(self):
@@ -142,22 +144,8 @@ class CrossValidatorWithStratificationID(CrossValidator):
             bestModelParms = dict((key.name, value) for key, value in epm[self.bestIndex].iteritems())
         else:
             bestModelParms = "\nCrossvalidation has not run yet.\n"
-        return bestModelParms
-        
-    def getCVMetrics(self):
-        if self.metricValueEveryParamSet is None: 
-            raise ValueError("metrics has the value None. Make sure the object of CrossValidatorNoStratification is fitted before calling the getCVMetrics method. ")
-            
-        if len(self.colnamesMetricValueEveryParamSet) != self.metricValueEveryParamSet.shape[1]:
-            raise ValueError("Number of column names self.colnamesMetricValueEveryParamSet don't match the number of columns self.metricValueEveryParamSet. ")
-            
-        # convert to pyspark.sql.DataFrame
-        metricsAsList = [tuple(float(y) for y in x) for x in self.metricValueEveryParamSet]
-        df = SQLContext.getOrCreate(SparkContext.getOrCreate()).createDataFrame(metricsAsList, self.colnamesMetricValueEveryParamSet)
-        df = df.withColumn(df.columns[0], df[df.columns[0]].cast(IntegerType()))
-        
-        return df
-
+        return bestModelParms       
+    
         
 import unittest
 from pyspark.sql import SparkSession
@@ -165,7 +153,6 @@ from pyspark.ml.regression import LinearRegression
 from pyspark.ml.evaluation import RegressionEvaluator
 from pyspark.ml.tuning import ParamGridBuilder
 from pyspark.ml.feature import VectorAssembler
-from pyspark.sql import Row
 
 class CrossValidatorWithStratificationIDTests(unittest.TestCase):
     
@@ -206,7 +193,7 @@ class CrossValidatorWithStratificationIDTests(unittest.TestCase):
                               evaluator=evaluator,
                               stratifyCol=stratifyCol)
         cvModel = validator.fit(featureAssembledData)
-        metrics = validator.getCVMetrics().drop("paramSetID")
+        metrics = cvModel.avgMetrics.drop("paramSetID")
         collectedMetrics = metrics.collect()
         def localRoundMetricValue(rr):
             rrAsDict = rr.asDict()
