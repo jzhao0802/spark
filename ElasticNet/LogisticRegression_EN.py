@@ -63,6 +63,7 @@ import numpy
 import os
 import time
 import datetime
+sc.addPyFile("/home/hjin/template_test/code/imspacv.py")
 from imspacv import CrossValidatorWithStratificationID
 
 def main():
@@ -124,6 +125,7 @@ def main():
     # cross-evaluation
     nEvalFolds = len(set(listUniqueOutFoldIDs))
     predictionsAllData = None
+    perfMetricsAllCV = None
 
     if not os.path.exists(resultDir_s3):
         os.makedirs(resultDir_s3, 0777)
@@ -153,6 +155,13 @@ def main():
         cvMetrics = cvModel.avgMetrics
         cvMetricsFileName = resultDir_s3 + "cvMetricsFold" + str(iFold)
         cvMetrics.coalesce(1).write.csv(cvMetricsFileName, header="true")
+
+        # combine all the metrics to get the best parameters
+        if perfMetricsAllCV is not None:
+            perfMetricsAllCV = perfMetricsAllCV.unionAll(cvMetrics)
+        else:
+            perfMetricsAllCV = cvMetrics
+
         # save the hyper-parameters of the best model
         bestParams = validator.getBestModelParams()
         with open(resultDir_master + "bestParamsFold" + str(iFold) + ".txt",
@@ -180,6 +189,14 @@ def main():
         filePerf.write("AUC: {}".format(auc))
         filePerf.write('\n')
         filePerf.write("AUPR: {}".format(aupr))
+
+    # get the best parameters across outer CV, still working on it !!!!!!
+    avgAllMetrics = perfMetricsAllCV\
+        .groupBy(perfMetricsAllCV.regParam,perfMetricsAllCV.elasticNetParam)\
+        .avg("metricValue")
+    bestAllParam = avgAllMetrics.filter(avgAllMetrics["avg(metricValue)"]==max)
+
+
 
     spark.stop()
 
