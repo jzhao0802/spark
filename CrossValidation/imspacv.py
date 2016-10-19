@@ -10,7 +10,7 @@ import numpy
 __all__ = ["CrossValidatorWithStratificationID"]
 
 
-def _write_to_np_MetricValueEveryParamSet(metricValueEveryParamSet, 
+def _write_to_np_MetricValueEveryParamSet(listMetricValueEveryParamSet, 
                                           colnamesMetricValueEveryParamSet, 
                                           j, params, metric):
     #
@@ -21,11 +21,11 @@ def _write_to_np_MetricValueEveryParamSet(metricValueEveryParamSet,
             colID = colnamesMetricValueEveryParamSet.index(paramName)
         except ValueError:
             print("Error! " + paramName + " doesn't exist in the list of hyper-parameter names colnamesMetricValueEveryParamSet.")
-        metricValueEveryParamSet[j, colID] = paramVal
+        listMetricValueEveryParamSet[j][colID] = float(paramVal)
         
-    metricValueEveryParamSet[j, -1] += metric
+    listMetricValueEveryParamSet[j][-1] += float(metric)
     
-    return metricValueEveryParamSet
+    return listMetricValueEveryParamSet
     
 
 class CrossValidatorWithStratificationID(CrossValidator):
@@ -127,9 +127,15 @@ class CrossValidatorWithStratificationID(CrossValidator):
         
         paramNames = [x.name for x in epm[0].keys()]
         metricValueCol = "metricValue"
-        metricValueEveryParamSet = numpy.empty((len(epm), 2 + len(paramNames)))
-        metricValueEveryParamSet[:,0] = numpy.arange(len(epm))
-        metricValueEveryParamSet[:,-1] = 0
+        
+        listMetricValueEveryParamSet = [[None for _ in range(2 + len(paramNames))] for _ in range(len(epm))]
+        for i in range(len(epm)):
+            listMetricValueEveryParamSet[i][0] = i
+            listMetricValueEveryParamSet[i][-1] = 0
+        
+        # metricValueEveryParamSet = numpy.empty((len(epm), 2 + len(paramNames)))
+        # metricValueEveryParamSet[:,0] = numpy.arange(len(epm))
+        # metricValueEveryParamSet[:,-1] = 0
         colnamesMetricValueEveryParamSet = ["paramSetID"] + paramNames + [metricValueCol]
         
         for i in range(nFolds):
@@ -142,23 +148,26 @@ class CrossValidatorWithStratificationID(CrossValidator):
                 # TODO: duplicate evaluator to take extra params from input
                 metric = eva.evaluate(model.transform(validation, epm[j]))
                 
-                metricValueEveryParamSet = \
-                    _write_to_np_MetricValueEveryParamSet(metricValueEveryParamSet, 
+                listMetricValueEveryParamSet = \
+                    _write_to_np_MetricValueEveryParamSet(listMetricValueEveryParamSet, 
                                                           colnamesMetricValueEveryParamSet, 
                                                           j, epm[j], metric)               
         
-        metricValueEveryParamSet[:,-1] = metricValueEveryParamSet[:,-1] / nFolds
+        for i in range(len(epm)):
+            listMetricValueEveryParamSet[i][-1] /= nFolds
+        
+        metricValues = numpy.array([x[-1] for x in listMetricValueEveryParamSet])
         
         if eva.isLargerBetter():
-            self.bestIndex = numpy.argmax(metricValueEveryParamSet[:,-1])
+            self.bestIndex = numpy.argmax(metricValues)
         else:
-            self.bestIndex = numpy.argmin(metricValueEveryParamSet[:,-1])
+            self.bestIndex = numpy.argmin(metricValues)
         
         #return the best model
         self.bestModel = est.fit(dataset, epm[self.bestIndex])
-        # convert numpy.ndarray to pyspark.sql.DataFrame
-        metricsAsList = [tuple(float(y) for y in x) for x in metricValueEveryParamSet]
-        df = SQLContext.getOrCreate(SparkContext.getOrCreate()).createDataFrame(metricsAsList, colnamesMetricValueEveryParamSet)
+        # convert list to pyspark.sql.DataFrame
+        # metricsAsList = [tuple(float(y) for y in x) for x in metricValueEveryParamSet]
+        df = SQLContext.getOrCreate(SparkContext.getOrCreate()).createDataFrame(listMetricValueEveryParamSet, colnamesMetricValueEveryParamSet)
         df = df.withColumn(df.columns[0], df[df.columns[0]].cast(IntegerType())).select(colnamesMetricValueEveryParamSet)
         return CrossValidatorModel(self.bestModel, df)
         
