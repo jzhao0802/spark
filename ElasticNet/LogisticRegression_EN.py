@@ -48,13 +48,11 @@ Instructions:
         2.2.2.  One could specify the file names for various outputs
 
 
-
-sudo spark-submit --deploy-mode client --master yarn --num-executors 5 --executor-cores 16 --executor-memory 19g --py-files /home/hjin/template_test/code/imspacv.py /home/hjin/template_test/code/LogisticRegression_EN.py
-
 '''
 
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, DoubleType, IntegerType, StringType
+from pyspark.sql.functions import *
 from pyspark.ml.feature import VectorAssembler
 from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 from pyspark.ml.classification import LogisticRegression
@@ -63,7 +61,6 @@ import numpy
 import os
 import time
 import datetime
-sc.addPyFile("/home/hjin/template_test/code/imspacv.py")
 from imspacv import CrossValidatorWithStratificationID
 
 def main():
@@ -125,7 +122,6 @@ def main():
     # cross-evaluation
     nEvalFolds = len(set(listUniqueOutFoldIDs))
     predictionsAllData = None
-    perfMetricsAllCV = None
 
     if not os.path.exists(resultDir_s3):
         os.makedirs(resultDir_s3, 0777)
@@ -155,26 +151,17 @@ def main():
         cvMetrics = cvModel.avgMetrics
         cvMetricsFileName = resultDir_s3 + "cvMetricsFold" + str(iFold)
         cvMetrics.coalesce(1).write.csv(cvMetricsFileName, header="true")
-
-        # combine all the metrics to get the best parameters
-        if perfMetricsAllCV is not None:
-            perfMetricsAllCV = perfMetricsAllCV.unionAll(cvMetrics)
-        else:
-            perfMetricsAllCV = cvMetrics
-
         # save the hyper-parameters of the best model
         bestParams = validator.getBestModelParams()
-        with open(resultDir_master + "bestParamsFold" + str(iFold) + ".txt",
-                  "w") as fileBestParams:
+        with open(resultDir_master + "bestParamsFold" + str(iFold) + ".txt", "w") as fileBestParams:
             fileBestParams.write(str(bestParams))
         # save coefficients of the best model
-        with open(resultDir_master + "coefsFold" + str(iFold) + ".txt",
-                  "w") as fileCoef:
-            fileCoef.write("Intercept: {}".format(str(cvModel.bestModel.intercept)))
-            fileCoef.write("\n")
+        with open(resultDir_master + "coefsFold" + str(iFold) + ".txt","w") as filecvCoef:
+            filecvCoef.write("Intercept: {}".format(str(cvModel.bestModel.intercept)))
+            filecvCoef.write("\n")
             for id in range(len(orgPredictorCols)):
-                fileCoef.write("%s : %f" %(orgPredictorCols[id] ,cvModel.bestModel.coefficients[id]))
-                fileCoef.write("\n")
+                filecvCoef.write("%s : %f" %(orgPredictorCols[id], cvModel.bestModel.coefficients[id]))
+                filecvCoef.write("\n")
 
     # save all predictions
     predictionsFileName = resultDir_s3 + "predictionsAllData"
@@ -189,14 +176,6 @@ def main():
         filePerf.write("AUC: {}".format(auc))
         filePerf.write('\n')
         filePerf.write("AUPR: {}".format(aupr))
-
-    # get the best parameters across outer CV, still working on it !!!!!!
-    avgAllMetrics = perfMetricsAllCV\
-        .groupBy(perfMetricsAllCV.regParam,perfMetricsAllCV.elasticNetParam)\
-        .avg("metricValue")
-    bestAllParam = avgAllMetrics.filter(avgAllMetrics["avg(metricValue)"]==max)
-
-
 
     spark.stop()
 
