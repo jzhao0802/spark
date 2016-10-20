@@ -96,7 +96,7 @@ def main():
     # the model (pipeline)
     lr = LogisticRegression(maxIter=1e5, featuresCol = collectivePredictorCol,
                             labelCol = orgOutputCol, regParam=0.0,
-                            elasticNetParam=0.0, standardization = True)
+                            elasticNetParam=0.0, standardization = False)
     evaluator = BinaryClassificationEvaluator(rawPredictionCol=predictionCol,
                                               labelCol=orgOutputCol)
 
