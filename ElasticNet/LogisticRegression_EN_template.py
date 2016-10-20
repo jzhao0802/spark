@@ -123,9 +123,9 @@ def main():
     predictionsAllData = None
 
     if not os.path.exists(resultDir_s3):
-        os.makedirs(resultDir_s3, 0777)
+        os.makedirs(resultDir_s3, 0o777)
     if not os.path.exists(resultDir_master):
-        os.makedirs(resultDir_master, 0777)
+        os.makedirs(resultDir_master, 0o777)
 
     for iFold in range(nEvalFolds):
         condition = featureAssembledData[outerFoldCol] == iFold
@@ -154,6 +154,7 @@ def main():
         bestParams = validator.getBestModelParams()
         with open(resultDir_master + "bestParamsFold" + str(iFold) + ".txt", "w") as fileBestParams:
             fileBestParams.write(str(bestParams))
+        os.chmod(resultDir_master + "bestParamsFold" + str(iFold) + ".txt", 0o777)
         # save coefficients of the best model
         with open(resultDir_master + "coefsFold" + str(iFold) + ".txt","w") as filecvCoef:
             filecvCoef.write("Intercept: {}".format(str(cvModel.bestModel.intercept)))
@@ -161,7 +162,7 @@ def main():
             for id in range(len(orgPredictorCols)):
                 filecvCoef.write("%s : %f" %(orgPredictorCols[id], cvModel.bestModel.coefficients[id]))
                 filecvCoef.write("\n")
-
+        os.chmod(resultDir_master + "coefsFold" + str(iFold) + ".txt", 0o777)
     # save all predictions
     predictionsFileName = resultDir_s3 + "predictionsAllData"
     predictionsAllData.select(orgOutputCol, predictionCol)\
@@ -175,7 +176,7 @@ def main():
         filePerf.write("AUC: {}".format(auc))
         filePerf.write('\n')
         filePerf.write("AUPR: {}".format(aupr))
-
+    os.chmod(resultDir_master + "auc_aupr.txt", 0o777)
     spark.stop()
 
 if __name__ == "__main__":
