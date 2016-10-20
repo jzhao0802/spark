@@ -110,7 +110,7 @@ def main():
 
     # the model (pipeline)
     lr = LogisticRegression(maxIter=1e5, featuresCol = collectivePredictorCol,
-                            labelCol = orgOutputCol, standardization = True)
+                            labelCol = orgOutputCol, standardization = False)
     evaluator = BinaryClassificationEvaluator(rawPredictionCol=predictionCol,
                                               labelCol=orgOutputCol)
     paramGrid = ParamGridBuilder()\
