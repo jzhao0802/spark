@@ -11,7 +11,7 @@ Instructions:
 
 1. How to run the code: The template code depends on the module imspacv (currently in CrossValidator/imspacv.py). As an example command for submitting the script, run 
 
-sudo spark-submit --deploy-mode client --master yarn --num-executors 5 --executor-cores 16 --executor-memory 19g --py-files /path/to/imspacv.py /path/to/RegressionForest.py
+sudo spark-submit --deploy-mode client --master yarn --num-executors 5 --executor-cores 16 --executor-memory 19g --py-files /path/to/imspacv.py /path/to/templateRegressionForest.py
 
 2. How to update the template for different specifications: 
 2.1 In general, important fields to specify are listed at the beginning of the main function. Please refer to the comments in the code. The following is the details:
