@@ -81,8 +81,8 @@ def main():
     
     # convert to ml-compatible format
     assembler = VectorAssembler(inputCols=orgPredictorCols, outputCol=collectivePredictorCol)
-    featureAssembledData = assembler.transform(data).select(orgOutputCol, collectivePredictorCol, outerFoldCol, innerFoldCol)    
-    
+    featureAssembledData = assembler.transform(data).select(orgOutputCol, collectivePredictorCol, outerFoldCol, innerFoldCol)  
+    featureAssembledData.cache()    
     
     # the model (pipeline)
     lr = LinearRegression(maxIter=1e5, standardization=True, featuresCol=collectivePredictorCol, labelCol=orgOutputCol)
@@ -97,9 +97,9 @@ def main():
     predictionsAllData = None
     
     if not os.path.exists(resultDir_s3):
-        os.makedirs(resultDir_s3, 0777)
+        os.makedirs(resultDir_s3, 0o777)
     if not os.path.exists(resultDir_master):
-        os.makedirs(resultDir_master, 0777)
+        os.makedirs(resultDir_master, 0o777)
         
     for iFold in range(nEvalFolds):
         condition = featureAssembledData[outerFoldCol] == iFold
@@ -126,23 +126,26 @@ def main():
         cvMetrics.coalesce(4).write.csv(cvMetricsFileName, header="true")
         # save the hyper-parameters of the best model
         bestParams = validator.getBestModelParams()
-        fileBestParams = open(resultDir_master + "bestParamsFold" + str(iFold) + ".txt", "w")
-        fileBestParams.writelines(str(bestParams))
-        fileBestParams.close()
+        fileNameBestParams = resultDir_master + "bestParamsFold" + str(iFold) + ".txt"
+        with open(fileNameBestParams, "w") as fileBestParams:
+            fileBestParams.writelines(str(bestParams))
+        os.chmod(fileNameBestParams, 0o777)
         # save coefficients of the best model
-        fileCoef = open(resultDir_master + "coefsFold" + str(iFold) + ".txt", "w")
-        fileCoef.writelines("Intercept: {}\n".format(str(cvModel.bestModel.intercept)))
-        fileCoef.writelines("Coefficients: {}\n".format(str(cvModel.bestModel.coefficients)))
-        fileCoef.close()        
+        fileNameCoef = resultDir_master + "coefsFold" + str(iFold) + ".txt"
+        with open(fileNameCoef, "w") as fileCoef:
+            fileCoef.writelines("Intercept: {}\n".format(str(cvModel.bestModel.intercept)))
+            fileCoef.writelines("Coefficients: {}\n".format(str(cvModel.bestModel.coefficients)))
+        os.chmod(fileNameCoef, 0o777)        
     
     # save all predictions
     predictionsFileName = resultDir_s3 + "predictionsAllData"
     predictionsAllData.select(orgOutputCol, predictionCol).write.csv(predictionsFileName, header="true")
     # save rmse
     rmse = evaluator.evaluate(predictionsAllData)
-    fileRMSE = open(resultDir_master + "rmse.txt", "w")
-    fileRMSE.writelines("rmse: {}".format(rmse))
-    fileRMSE.close()
+    fileNameRMSE = resultDir_master + "rmse.txt"
+    with open(fileNameRMSE, "w") as fileRMSE:
+        fileRMSE.writelines("rmse: {}".format(rmse))
+    os.chmod(fileNameRMSE, 0o777)    
     
     spark.stop()
 
