@@ -10,7 +10,7 @@ import numpy
 __all__ = ["CrossValidatorWithStratificationID"]
 
 
-def _write_to_np_MetricValueEveryParamSet(metricValueEveryParamSet, 
+def _write_to_np_MetricValueEveryParamSet(listMetricValueEveryParamSet, 
                                           colnamesMetricValueEveryParamSet, 
                                           j, params, metric):
     #
@@ -21,11 +21,15 @@ def _write_to_np_MetricValueEveryParamSet(metricValueEveryParamSet,
             colID = colnamesMetricValueEveryParamSet.index(paramName)
         except ValueError:
             print("Error! " + paramName + " doesn't exist in the list of hyper-parameter names colnamesMetricValueEveryParamSet.")
-        metricValueEveryParamSet[j, colID] = paramVal
         
-    metricValueEveryParamSet[j, -1] += metric
+        if type(paramVal) is str:
+            listMetricValueEveryParamSet[j][colID] = paramVal
+        else:
+            listMetricValueEveryParamSet[j][colID] = float(paramVal)
+        
+    listMetricValueEveryParamSet[j][-1] += float(metric)
     
-    return metricValueEveryParamSet
+    return listMetricValueEveryParamSet
     
 
 class CrossValidatorWithStratificationID(CrossValidator):
@@ -127,9 +131,12 @@ class CrossValidatorWithStratificationID(CrossValidator):
         
         paramNames = [x.name for x in epm[0].keys()]
         metricValueCol = "metricValue"
-        metricValueEveryParamSet = numpy.empty((len(epm), 2 + len(paramNames)))
-        metricValueEveryParamSet[:,0] = numpy.arange(len(epm))
-        metricValueEveryParamSet[:,-1] = 0
+        
+        listMetricValueEveryParamSet = [[None for _ in range(2 + len(paramNames))] for _ in range(len(epm))]
+        for i in range(len(epm)):
+            listMetricValueEveryParamSet[i][0] = i
+            listMetricValueEveryParamSet[i][-1] = 0
+        
         colnamesMetricValueEveryParamSet = ["paramSetID"] + paramNames + [metricValueCol]
         
         for i in range(nFolds):
@@ -142,23 +149,25 @@ class CrossValidatorWithStratificationID(CrossValidator):
                 # TODO: duplicate evaluator to take extra params from input
                 metric = eva.evaluate(model.transform(validation, epm[j]))
                 
-                metricValueEveryParamSet = \
-                    _write_to_np_MetricValueEveryParamSet(metricValueEveryParamSet, 
+                listMetricValueEveryParamSet = \
+                    _write_to_np_MetricValueEveryParamSet(listMetricValueEveryParamSet, 
                                                           colnamesMetricValueEveryParamSet, 
                                                           j, epm[j], metric)               
         
-        metricValueEveryParamSet[:,-1] = metricValueEveryParamSet[:,-1] / nFolds
+        for i in range(len(epm)):
+            listMetricValueEveryParamSet[i][-1] /= nFolds
+        
+        metricValues = numpy.array([x[-1] for x in listMetricValueEveryParamSet])
         
         if eva.isLargerBetter():
-            self.bestIndex = numpy.argmax(metricValueEveryParamSet[:,-1])
+            self.bestIndex = numpy.argmax(metricValues)
         else:
-            self.bestIndex = numpy.argmin(metricValueEveryParamSet[:,-1])
+            self.bestIndex = numpy.argmin(metricValues)
         
         #return the best model
         self.bestModel = est.fit(dataset, epm[self.bestIndex])
-        # convert numpy.ndarray to pyspark.sql.DataFrame
-        metricsAsList = [tuple(float(y) for y in x) for x in metricValueEveryParamSet]
-        df = SQLContext.getOrCreate(SparkContext.getOrCreate()).createDataFrame(metricsAsList, colnamesMetricValueEveryParamSet)
+        # convert list to pyspark.sql.DataFrame
+        df = SQLContext.getOrCreate(SparkContext.getOrCreate()).createDataFrame(listMetricValueEveryParamSet, colnamesMetricValueEveryParamSet)
         df = df.withColumn(df.columns[0], df[df.columns[0]].cast(IntegerType())).select(colnamesMetricValueEveryParamSet)
         return CrossValidatorModel(self.bestModel, df)
         
@@ -179,6 +188,12 @@ from pyspark.ml.regression import LinearRegression
 from pyspark.ml.evaluation import RegressionEvaluator
 from pyspark.ml.tuning import ParamGridBuilder
 from pyspark.ml.feature import VectorAssembler
+from pyspark.ml.regression import RandomForestRegressor
+
+def localRoundMetricValue(rr):
+    rrAsDict = rr.asDict()
+    rrAsDict["metricValue"] = round(rrAsDict["metricValue"], 3)
+    return rrAsDict
 
 class CrossValidatorWithStratificationIDTests(unittest.TestCase):
     
@@ -220,29 +235,55 @@ class CrossValidatorWithStratificationIDTests(unittest.TestCase):
                               stratifyCol=stratifyCol)
         cvModel = validator.fit(featureAssembledData)
         metrics = cvModel.avgMetrics.drop("paramSetID")
-        collectedMetrics = metrics.collect()
-        def localRoundMetricValue(rr):
-            rrAsDict = rr.asDict()
-            rrAsDict["metricValue"] = round(rrAsDict["metricValue"], 3)
-            return rrAsDict
+        collectedMetrics = metrics.collect()        
         roundedMetrics = [localRoundMetricValue(x) for x in collectedMetrics]
-        def localConvertDictToStr(dd):
-            return "".join("{}:{};".format(key,value) for key, value in dd.items())
-        strMetrics = set([localConvertDictToStr(x) for x in roundedMetrics])
         
-        expectedMetrics = set([\
-            "regParam:0.1;elasticNetParam:0.0;metricValue:1.087;",
-            "regParam:1.0;elasticNetParam:0.0;metricValue:1.052;",
-            "regParam:0.1;elasticNetParam:0.5;metricValue:1.06;",
-            "regParam:1.0;elasticNetParam:0.5;metricValue:1.069;"
-        ])
-        
-        self.assertEqual(strMetrics, expectedMetrics, "Incorrect list of evaluation metric values for all hyper-parameter sets.")
+        self.assertEqual(len(roundedMetrics), 4, "Incorrect number of returned metric values.")
+        expectedMetricStructure = [\
+            {"regParam":0.1, "elasticNetParam": 0.0, "metricValue": 1.087},
+            {"regParam":1.0, "elasticNetParam": 0.0, "metricValue": 1.052},
+            {"regParam":0.1, "elasticNetParam": 0.5, "metricValue": 1.06},
+            {"regParam":1.0, "elasticNetParam": 0.5, "metricValue": 1.069}\
+        ]
+        for metric in roundedMetrics:
+            self.assertTrue(metric in expectedMetricStructure, "{} is not expected.".format(metric))        
         
         bestParams = validator.getBestModelParams()
         self.assertEqual(bestParams, {'regParam': 1, 'elasticNetParam': 0}, "Incorrect best parameters.")
         
-            
+    def test_OutputNonNumericalGridSearch(self):
+        assembler = VectorAssembler(inputCols=self.data.columns[1:(-1)], outputCol="features")
+        stratifyCol = "foldID"
+        featureAssembledData = assembler.transform(self.data).select("y", "features", stratifyCol)
+        rf = RandomForestRegressor(featuresCol="features", 
+                               labelCol="y",
+                               minInstancesPerNode=1)
+        evaluator = RegressionEvaluator(predictionCol="prediction", labelCol="y")
+        strategyGrid = ["sqrt", "5"]
+        depthGrid = [3, 15]
+        paramGrid = ParamGridBuilder()\
+               .addGrid(rf.maxDepth, depthGrid)\
+               .addGrid(rf.featureSubsetStrategy, strategyGrid)\
+               .build()    
+        validator = CrossValidatorWithStratificationID(estimator=rf,
+                              estimatorParamMaps=paramGrid,
+                              evaluator=evaluator,
+                              stratifyCol=stratifyCol)
+        cvModel = validator.fit(featureAssembledData)
+        metrics = cvModel.avgMetrics.drop("paramSetID")
+        collectedMetrics = metrics.collect()        
+        roundedMetrics = [localRoundMetricValue(x) for x in collectedMetrics]
+        
+        self.assertEqual(len(roundedMetrics), 4, "Incorrect number of returned metric values.")
+        expectedMetricStructure = [\
+            {'metricValue': 1.073, 'maxDepth': 3.0, 'featureSubsetStrategy': 'sqrt'},
+            {'metricValue': 1.07, 'maxDepth': 3.0, 'featureSubsetStrategy': '5'},
+            {'metricValue': 1.111, 'maxDepth': 15.0, 'featureSubsetStrategy': 'sqrt'},
+            {'metricValue': 1.108, 'maxDepth': 15.0, 'featureSubsetStrategy': '5'}\
+        ]
+        for metric in roundedMetrics:
+            self.assertTrue(metric in expectedMetricStructure, "{} is not expected.".format(metric))
+        
 if __name__ == "__main__":
     
     unittest.main()
