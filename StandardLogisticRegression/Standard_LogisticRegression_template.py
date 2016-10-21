@@ -2,8 +2,8 @@
 
 Instructions:
 
-0.  This script serves as a template for using standard logistic regression with an outer cross-validation.
-    The outer cross-validation loops uses predefined fold IDs included in the input data.
+0.  This script serves as a template for using standard logistic regression with an outer cross-evaluation.
+    The outer cross-evaluation loops uses predefined fold IDs included in the input data.
 
     Using the template, it is possible to obtain the following outputs:
         0.1. The AUC and AUPR values in every outer cross-evaluation round;
@@ -14,7 +14,7 @@ Instructions:
     As an example command for submitting the script, run
 
     sudo spark-submit --deploy-mode client --master yarn --num-executors 5
-    --executor-cores 16 --executor-memory 19g /path/to/LogisticRegression_EN.py
+    --executor-cores 16 --executor-memory 19g /path/to/Standard_LogisticRegression_template.py
 
 2.  How to update the template for different specifications:
     2.1 In general, important fields to specify are listed at the beginning of the main function.
@@ -24,9 +24,9 @@ Instructions:
                 The data needs to include the following information:
                     i. an output column,
                     ii. one or more predictor columns
-                    iii. one columns of outer stratification fold ID information.
+                    iii. one column of cross-evaluation stratification fold ID information.
         2.1.2.  (Optional) You could specify the app name by relpacing the variable "__file__" with your preferred name.
-        2.1.3.  The column names of the outer stratification fold IDs.
+        2.1.3.  The column name of the cross-evaluation stratification fold IDs.
                 The program uses it to find stratification information stored in the input data.
         2.1.4.  The column name of the output / dependent variable.
         2.1.5.  The column names of the predictors (as a list).
@@ -36,8 +36,10 @@ Instructions:
                 This could be achieved by e.g., using the current timestamp as the folder name.
 
     2.2 Other fields to specify. The following is some possibilities but not an exhaustive list:
-        2.2.1.  If one needs to overwrite an existing csv file on s3, add the argument mode="overwrite" when calling DataFrame.write.csv();
-        2.2.2.  One could specify the file names for various outputs
+        2.2.1. Arguments for other functions such as initialising RegressionEvaluator, etc. Please refer to               
+               https://spark.apache.org/docs/2.0.0/api/python/pyspark.ml.html for details. 
+        2.2.2.  If one needs to overwrite an existing csv file on s3, add the argument mode="overwrite" when calling DataFrame.write.csv();
+        2.2.3.  One could specify the file names for various outputs
 
 
 '''
@@ -139,7 +141,7 @@ def main():
             filecvCoef.write("Intercept: {}".format(str(cvModel.intercept)))
             filecvCoef.write("\n")
             for id in range(len(orgPredictorCols)):
-                filecvCoef.write("%s : %f" %(orgPredictorCols[id], cvModel.coefficients[id]))
+                filecvCoef.write("{} : {}" %(orgPredictorCols[id], cvModel.coefficients[id]))
                 filecvCoef.write("\n")
         os.chmod(resultDir_master + "coefsFold" + str(iFold) + ".txt", 0o777)
     # save all predictions
