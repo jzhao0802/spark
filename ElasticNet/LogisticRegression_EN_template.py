@@ -3,8 +3,8 @@
 Instructions:
 
 0.  This script serves as a template for using logistic regression with the
-    elastic-net penalty and an outer plus an inner cross-validation for hyper-parameter selection.
-    Both the outer and the inner cross-validation loops uses predefined fold IDs included in the input data.
+    elastic-net penalty and an outer cross-evaluation and an inner cross-validation for hyper-parameter selection.
+    Both the outer and the inner loops use  predefined fold IDs included in the input data.
 
     Using the template, it is possible to obtain the following outputs:
         0.1. The AUC values of all hyper-parameter sets in every outer cross-evaluation round;
@@ -17,7 +17,7 @@ Instructions:
 
     sudo spark-submit --deploy-mode client --master yarn --num-executors 5
     --executor-cores 16 --executor-memory 19g --py-files /path/to/imspacv.py
-    /path/to/LogisticRegression_EN.py
+    /path/to/LogisticRegression_EN_template.py
 
 2.  How to update the template for different specifications:
     2.1 In general, important fields to specify are listed at the beginning of the main function.
@@ -44,8 +44,10 @@ Instructions:
                 This could be achieved by e.g., using the current timestamp as the folder name.
 
     2.2 Other fields to specify. The following is some possibilities but not an exhaustive list:
-        2.2.1.  If one needs to overwrite an existing csv file on s3, add the argument mode="overwrite" when calling DataFrame.write.csv();
-        2.2.2.  One could specify the file names for various outputs
+        2.2.1. Arguments for other functions such as initialising LogisticRegression, BinaryClassificationEvaluator, etc. Please refer to 
+               https://spark.apache.org/docs/2.0.0/api/python/pyspark.ml.html for details. 
+        2.2.2.  If one needs to overwrite an existing csv file on s3, add the argument mode="overwrite" when calling DataFrame.write.csv();
+        2.2.3.  One could specify the file names for various outputs
 
 
 '''
@@ -149,7 +151,7 @@ def main():
         # save the metrics for all hyper-parameter sets in cv
         cvMetrics = cvModel.avgMetrics
         cvMetricsFileName = resultDir_s3 + "cvMetricsFold" + str(iFold)
-        cvMetrics.coalesce(1).write.csv(cvMetricsFileName, header="true")
+        cvMetrics.coalesce(4).write.csv(cvMetricsFileName, header="true")
         # save the hyper-parameters of the best model
         bestParams = validator.getBestModelParams()
         with open(resultDir_master + "bestParamsFold" + str(iFold) + ".txt", "w") as fileBestParams:
