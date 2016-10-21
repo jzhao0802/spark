@@ -36,7 +36,7 @@ Instructions:
                 This could be achieved by e.g., using the current timestamp as the folder name.
 
     2.2 Other fields to specify. The following is some possibilities but not an exhaustive list:
-        2.2.1. Arguments for other functions such as initialising RegressionEvaluator, etc. Please refer to               
+        2.2.1. Arguments for other functions such as initialising LogisticRegression, BinaryClassificationEvaluator, etc. Please refer to               
                https://spark.apache.org/docs/2.0.0/api/python/pyspark.ml.html for details. 
         2.2.2.  If one needs to overwrite an existing csv file on s3, add the argument mode="overwrite" when calling DataFrame.write.csv();
         2.2.3.  One could specify the file names for various outputs
