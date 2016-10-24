@@ -14,8 +14,8 @@ Instructions:
 1.  How to run the code: The template code depends on the module imspacv (currently in CrossValidator/imspacv.py).
     As an example command for submitting the script, run
 
-    sudo spark-submit --deploy-mode client --master yarn --num-executors 5
-    --executor-cores 16 --executor-memory 19g --py-files /path/to/imspacv.py
+    sudo spark-submit --deploy-mode client --master yarn --num-executors 15
+    --executor-cores 6 --executor-memory 10g --py-files /path/to/imspacv.py
     /path/to/templateRandomForest.py
 
 2.  How to update the template for different specifications:
@@ -25,7 +25,7 @@ Instructions:
                 Please specify separately the grids for the hyper-parameters number of trees, number of depth and nodesize.
                 Please specify each grid as a list.
         2.1.2   Seed will be used in Random Forest function
-        2.1.3   Indexed column name for output
+        2.1.3   Doubled column name for output
         2.1.4.  The input datafile name:
                 It needs to be a location on s3.
                 The data needs to include the following information:
@@ -53,7 +53,7 @@ Instructions:
 
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, DoubleType, IntegerType, StringType
-from pyspark.ml.feature import VectorAssembler, StringIndexer
+from pyspark.ml.feature import VectorAssembler
 from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 from pyspark.ml.classification import RandomForestClassifier
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
@@ -68,7 +68,7 @@ def main():
     numtree = [20, 30]
     numdepth = [3, 4]
     nodesize = [3, 5]
-    mtry = ["onethird", "3"]
+    mtry = ["auto", "2"]
     # user to specify : seed in Random Forest model
     iseed = 42
     # user to specify: input data location
@@ -84,8 +84,8 @@ def main():
     # user to specify: original column names for predictors and output in data
     orgOutputCol = "y"
     orgPredictorCols = data.columns[1:-2]
-    # user to specify: indexed column name for output
-    indexedOutputCol = "indexed"
+    # user to specify: doubled column name for output
+    doubledOutputCol = "doubled"
     # user to specify: the collective column name for all predictors
     collectivePredictorCol = "features"
     # user to specify: the column name for prediction
@@ -114,16 +114,15 @@ def main():
         .select(orgOutputCol, collectivePredictorCol, outerFoldCol, innerFoldCol)
 
 
-    # indexed the output
-    indexedFeatureAssembledData = StringIndexer(inputCol=orgOutputCol,outputCol=indexedOutputCol)\
-        .fit(featureAssembledData)\
-        .transform(featureAssembledData)
+    # doubled the output
+    doubleFeatureAssembleData = featureAssembledData\
+        .withColumn(doubledOutputCol,featureAssembledData[orgOutputCol].cast("double"))
 
     # the model (pipeline)
     rf = RandomForestClassifier(featuresCol = collectivePredictorCol,
-                                labelCol = indexedOutputCol, seed=iseed)
+                                labelCol = doubledOutputCol, seed=iseed)
     evaluator = BinaryClassificationEvaluator(rawPredictionCol=predictionCol,
-                                              labelCol=indexedOutputCol)
+                                              labelCol=doubledOutputCol)
     paramGrid = ParamGridBuilder()\
             .addGrid(rf.numTrees, numtree)\
             .addGrid(rf.maxDepth, numdepth)\
@@ -142,9 +141,9 @@ def main():
     os.chmod(resultDir_master, 0o777)
 
     for iFold in range(nEvalFolds):
-        condition = indexedFeatureAssembledData[outerFoldCol] == iFold
-        testData = indexedFeatureAssembledData.filter(condition)
-        trainData = indexedFeatureAssembledData.filter(~condition)
+        condition = doubleFeatureAssembleData[outerFoldCol] == iFold
+        testData = doubleFeatureAssembleData.filter(condition)
+        trainData = doubleFeatureAssembleData.filter(~condition)
 
         validator = CrossValidatorWithStratificationID(\
                         estimator=rf,
@@ -163,7 +162,7 @@ def main():
         # save the metrics for all hyper-parameter sets in cv
         cvMetrics = cvModel.avgMetrics
         cvMetricsFileName = resultDir_s3 + "cvMetricsFold" + str(iFold)
-        cvMetrics.coalesce(1).write.csv(cvMetricsFileName, header="true")
+        cvMetrics.coalesce(4).write.csv(cvMetricsFileName, header="true")
 
         # save the hyper-parameters of the best model
         bestParams = validator.getBestModelParams()
@@ -175,7 +174,7 @@ def main():
         with open(resultDir_master + "importanceScoreFold" + str(iFold) + ".txt",
                   "w") as filecvCoef:
             for id in range(len(orgPredictorCols)):
-                filecvCoef.write("{} : {}" %(orgPredictorCols[id], cvModel.bestModel.featureImportances[id]))
+                filecvCoef.write("{0} : {1}".format(orgPredictorCols[id], cvModel.bestModel.featureImportances[id]))
                 filecvCoef.write("\n")
         os.chmod(resultDir_master + "importanceScoreFold" + str(iFold) + ".txt", 0o777)
 
