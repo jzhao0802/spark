@@ -78,8 +78,10 @@ def main():
     # user to specify: original column names for predictors and output in data
     orgOutputCol = "y"
     orgPredictorCols = data.columns[1:-2]
-    # user to specify: doubled column name for output
-    doubledOutputCol = "doubled"
+    # sanity check 
+    if type(data.select(orgOutputCol).schema.fields[0].dataType) not in (DoubleType, IntegerType):
+        raise TypeError("The output column is not of type integer or double. ")
+    data = data.withColumn(orgOutputCol, data[orgOutputCol].cast("double"))
     # user to specify: the collective column name for all predictors
     collectivePredictorCol = "features"
     # user to specify: the column name for prediction
@@ -89,7 +91,7 @@ def main():
     st = datetime.datetime.fromtimestamp(start_time).strftime('%Y%m%d_%H%M%S')
     resultDir_s3 = "s3://emr-rwes-pa-spark-dev-datastore/Hui/template_test/results/" + st + "/"
     # user to specify the output location on master
-    resultDir_master = "/home/hjin/template_test/results/" + st + "/"
+    resultDir_master = "/home/lichao.wang/code/lichao/test/Results/" + st + "/"
 
     # sanity check
     if outerFoldCol not in data.columns:
@@ -109,15 +111,11 @@ def main():
     featureAssembledData.cache()
 
 
-    # doubled the output
-    doubleFeatureAssembleData = featureAssembledData\
-        .withColumn(doubledOutputCol,featureAssembledData[orgOutputCol].cast("double"))
-
     # the model (pipeline)
     rf = RandomForestClassifier(featuresCol = collectivePredictorCol,
-                                labelCol = doubledOutputCol, seed=iseed)
+                                labelCol = orgOutputCol, seed=iseed)
     evaluator = BinaryClassificationEvaluator(rawPredictionCol=predictionCol,
-                                              labelCol=doubledOutputCol)
+                                              labelCol=orgOutputCol)
     paramGrid = ParamGridBuilder()\
             .addGrid(rf.numTrees, numtree)\
             .addGrid(rf.maxDepth, numdepth)\
@@ -136,9 +134,9 @@ def main():
     os.chmod(resultDir_master, 0o777)
 
     for iFold in range(nEvalFolds):
-        condition = doubleFeatureAssembleData[outerFoldCol] == iFold
-        testData = doubleFeatureAssembleData.filter(condition)
-        trainData = doubleFeatureAssembleData.filter(~condition)
+        condition = featureAssembledData[outerFoldCol] == iFold
+        testData = featureAssembledData.filter(condition)
+        trainData = featureAssembledData.filter(~condition)
 
         validator = CrossValidatorWithStratificationID(\
                         estimator=rf,
