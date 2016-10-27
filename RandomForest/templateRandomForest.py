@@ -2,7 +2,7 @@
 
 Instructions:
 
-0.  This script serves as a template for using Random Forest model with an outer cross-evaluation plus an inner cross-validation for hyper-parameter selection.
+0.  This script serves as a template for using Random Forest model for classification with an outer cross-evaluation plus an inner cross-validation for hyper-parameter selection.
     Both the outer cross-evaluation and the inner cross-validation loops uses predefined fold IDs included in the input data.
 
     Using the template, it is possible to obtain the following outputs:
@@ -11,12 +11,10 @@ Instructions:
         0.3. Predictions(probability of label 1) and true label for the entire input data (across all evaluation rounds);
         0.4. The overall AUC and AUPR values for the entire input data.
 
-1.  How to run the code: The template code depends on the module imspacv (currently in CrossValidator/imspacv.py).
-    As an example command for submitting the script, run
-
-    sudo spark-submit --deploy-mode client --master yarn --num-executors 15
-    --executor-cores 6 --executor-memory 10g --py-files /path/to/imspacv.py
-    /path/to/templateRandomForest.py
+1.  How to run the code: The template code depends on the module imspacv (currently in CrossValidator/imspacv.py). To run the script, do the following:
+    1.1. Put both the template script and imspacv.py under the same location; 
+    1.2. Change your current location to the location in 1.1. 
+    1.3. Execute in the command line: sudo spark-submit --deploy-mode client --master yarn --num-executors 5 --executor-cores 16 --executor-memory 19g --py-files imspacv.py templateRandomForest.py
 
 2.  How to update the template for different specifications:
     2.1 In general, important fields to specify are listed at the beginning of the main function.
