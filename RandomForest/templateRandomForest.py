@@ -2,14 +2,11 @@
 
 Instructions:
 
-0.  This script serves as a template for using Random Forest model for classification with an outer cross-evaluation plus an inner cross-validation for hyper-parameter selection.
-    Both the outer cross-evaluation and the inner cross-validation loops uses predefined fold IDs included in the input data.
-
-    Using the template, it is possible to obtain the following outputs:
-        0.1. The AUC and AUPR values of all hyper-parameter sets in every outer cross-evaluation round;
-        0.2. The best hyper-parameter set in every outer cross-evaluation round;
-        0.3. Predictions(probability of label 1) and true label for the entire input data (across all evaluation rounds);
-        0.4. The overall AUC and AUPR values for the entire input data.
+0.  This script serves as a template for using Random Forest model for classification with an outer cross-evaluation plus an inner cross-validation for hyper-parameter selection. Both the outer cross-evaluation and the inner cross-validation loops uses predefined fold IDs included in the input data. Using the template, it is possible to obtain the following outputs:
+    0.1. The AUC and AUPR values of all hyper-parameter sets in every outer cross-evaluation round;
+    0.2. The best hyper-parameter set in every outer cross-evaluation round;
+    0.3. Predictions(probability of label 1) and true label for the entire input data (across all evaluation rounds);
+    0.4. The overall AUC and AUPR values for the entire input data.
 
 1.  How to run the code: The template code depends on the module imspacv (currently in CrossValidator/imspacv.py). To run the script, do the following:
     1.1. Put both the template script and imspacv.py under the same location; 
@@ -19,9 +16,8 @@ Instructions:
 2.  How to update the template for different specifications:
     2.1 In general, important fields to specify are listed at the beginning of the main function.
         Please refer to the comments in the code. The following is the details:
-        2.1.1.  1D grids for number of trees, number of depth and nodesize:
-                Please specify separately the grids for the hyper-parameters number of trees, number of depth and nodesize.
-                Please specify each grid as a list.
+        2.1.1.  1D grids for hyper-parameters such as the number of trees, depth and nodesize:
+                Please give one list to every hyper-parameter you'd like to search along. 
         2.1.2   Seed will be used in Random Forest function
         2.1.3   Doubled column name for output
         2.1.4.  The input datafile name:
@@ -52,7 +48,7 @@ Instructions:
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, DoubleType, IntegerType, StringType
 from pyspark.ml.feature import VectorAssembler
-from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
+from pyspark.ml.tuning import ParamGridBuilder
 from pyspark.ml.classification import RandomForestClassifier
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
 import numpy
@@ -110,6 +106,7 @@ def main():
     assembler = VectorAssembler(inputCols=orgPredictorCols, outputCol=collectivePredictorCol)
     featureAssembledData = assembler.transform(data)\
         .select(orgOutputCol, collectivePredictorCol, outerFoldCol, innerFoldCol)
+    featureAssembledData.cache()
 
 
     # doubled the output
