@@ -4,6 +4,7 @@ from pyspark.sql import HiveContext
 import unittest
 from pyspark.ml.feature import VectorAssembler
 from pyspark.sql.functions import lit, col
+from pyspark.ml.linalg import Vectors
 
 
 def assemble_pred_vector(data, orgLabelCol, orgPositivePredictionCol, newLabelCol, newPredictionCol):
@@ -67,7 +68,7 @@ class PREvaluationMetricTests(unittest.TestCase):
         precision = evaluator.evaluate(PREvaluationMetricTests.scoreAndLabelsVectorised,
                                        {"metricName": "precisionAtGivenRecall",
                                         "metricParams": {"recallValue": desiredRecall}})
-        self.assertEqual(round(precision, 4), 1.0, "precisionAtGivenRecall metric producing incorrect precision: %s" % precision)
+        self.assertEqual(round(precision, 4), 1.0, "precisionAtGivenRecall metric producing incorrect precision: {}".format(precision))
 
     def test_is_precision_matching_2(self):
         evaluator = BinaryClassificationEvaluatorWithPrecisionAtRecall(rawPredictionCol=self.rawPredictionCol, labelCol=self.labelCol)
@@ -75,7 +76,7 @@ class PREvaluationMetricTests(unittest.TestCase):
         precision = evaluator.evaluate(PREvaluationMetricTests.scoreAndLabelsVectorised,
                                        {"metricName": "precisionAtGivenRecall",
                                         "metricParams": {"recallValue": desiredRecall}})
-        self.assertEqual(round(precision, 4), 0.9048, "precisionAtGivenRecall metric producing incorrect precision: %s" % precision)
+        self.assertEqual(round(precision, 4), 0.9048, "precisionAtGivenRecall metric producing incorrect precision: {}".format(precision))
 
     def test_is_precision_matching_3(self):
         evaluator = BinaryClassificationEvaluatorWithPrecisionAtRecall(rawPredictionCol=self.rawPredictionCol, labelCol=self.labelCol)
@@ -83,7 +84,7 @@ class PREvaluationMetricTests(unittest.TestCase):
         precision = evaluator.evaluate(PREvaluationMetricTests.scoreAndLabelsVectorised,
                                        {"metricName": "precisionAtGivenRecall",
                                         "metricParams": {"recallValue": desiredRecall}})
-        self.assertEqual(round(precision, 4), 0.8000, "precisionAtGivenRecall metric producing incorrect precision: %s" % precision)
+        self.assertEqual(round(precision, 4), 0.8000, "precisionAtGivenRecall metric producing incorrect precision: {}".format(precision))
 
     def test_is_precision_isLargeBetter_matching(self):
         evaluator = BinaryClassificationEvaluatorWithPrecisionAtRecall(rawPredictionCol=self.rawPredictionCol, labelCol=self.labelCol)
@@ -141,10 +142,9 @@ class PREvaluationMetricTests(unittest.TestCase):
         )
         precision = evaluator.evaluate(PREvaluationMetricTests.scoreAndLabelsVectorised)
         self.assertEqual(round(precision, 4), 0.9048,
-                         "precisionAtGivenRecall metric producing incorrect precision: %s" % precision)
+                         "precisionAtGivenRecall metric producing incorrect precision: {}".format(precision))
 
     def test_simple(self):
-        from pyspark.mllib.linalg import Vectors
         scoreAndLabels = map(lambda x: (Vectors.dense([1.0 - x[0], x[0]]), x[1]),
                              [(0.1, 0.0), (0.1, 1.0), (0.4, 0.0), (0.6, 0.0), (0.6, 1.0), (0.6, 1.0), (0.8, 1.0)])
         dataset = PREvaluationMetricTests.sqlContext.createDataFrame(scoreAndLabels, ["raw", "label"])
@@ -155,10 +155,9 @@ class PREvaluationMetricTests(unittest.TestCase):
         )
         precision = evaluator.evaluate(dataset)
         self.assertEqual(round(precision, 4), 0.5714,
-                         "precisionAtGivenRecall metric producing incorrect precision: %s" % precision)
+                         "precisionAtGivenRecall metric producing incorrect precision: {}".format(precision))
                          
     def test_label_order(self):
-        from pyspark.mllib.linalg import Vectors
         scoreAndLabels = map(lambda x: (Vectors.dense([1.0 - x[0], x[0]]), x[1]),
                              [(0.1, 1.0), (0.1, 1.0), (0.1, 1.0), (0.1, 1.0),
                              (0.1, 1.0), (0.1, 1.0), (0.1, 1.0), (0.1, 1.0),
@@ -180,8 +179,34 @@ class PREvaluationMetricTests(unittest.TestCase):
         )
         precision = evaluator.evaluate(dataset)
         self.assertEqual(round(precision, 4), 0.5,
-                         "precisionAtGivenRecall metric producing incorrect precision: %s" % precision)
+                         "precisionAtGivenRecall metric producing incorrect precision: {}".format(precision))
 
+    def test_all_metrics_default(self):
+        scoreAndLabels = map(lambda x: (Vectors.dense([1.0 - x[0], x[0]]), x[1]),
+                             [(0.1, 0.0), (0.1, 1.0), (0.4, 0.0), (0.6, 0.0), (0.6, 1.0), (0.6, 1.0), (0.8, 1.0)])
+        dataset = PREvaluationMetricTests.sqlContext.createDataFrame(scoreAndLabels, ["raw", "label"])
+        evaluator = BinaryClassificationEvaluatorWithPrecisionAtRecall(rawPredictionCol="raw")
+        all_metrics = evaluator.evaluateWithSeveralMetrics(dataset)
+        rounded_metrics = [{list(x.items())[0][0]: round(list(x.items())[0][1], 4)} for x in all_metrics]
+        expected_metrics = [{"{'metricName': 'areaUnderROC'}": 0.7083}, 
+                            {"{'metricName': 'areaUnderPR'}": 0.7083}, 
+                            {"{'metricParams': {'recallValue': 0.05}, 'metricName': 'precisionAtGivenRecall'}": 1.0000}]
+        self.assertEqual(rounded_metrics, expected_metrics,
+                         "Expected metrics: {1}; Result rounded metrics: {0};".format(expected_metrics, rounded_metrics))
+                         
+    def test_all_metrics_two_precisions(self):
+        scoreAndLabels = map(lambda x: (Vectors.dense([1.0 - x[0], x[0]]), x[1]),
+                             [(0.1, 0.0), (0.1, 1.0), (0.4, 0.0), (0.6, 0.0), (0.6, 1.0), (0.6, 1.0), (0.8, 1.0)])
+        dataset = PREvaluationMetricTests.sqlContext.createDataFrame(scoreAndLabels, ["raw", "label"])
+        evaluator = BinaryClassificationEvaluatorWithPrecisionAtRecall(rawPredictionCol="raw")
+        metricSets = [{"metricName": "precisionAtGivenRecall", "metricParams": {"recallValue": 0.05}},
+                      {"metricName": "precisionAtGivenRecall", "metricParams": {"recallValue": 1}}]
+        all_metrics = evaluator.evaluateWithSeveralMetrics(dataset, metricSets = metricSets)
+        rounded_metrics = [{list(x.items())[0][0]: round(list(x.items())[0][1], 4)} for x in all_metrics]
+        expected_metrics = [{"{'metricParams': {'recallValue': 0.05}, 'metricName': 'precisionAtGivenRecall'}": 1.0000},
+                            {"{'metricParams': {'recallValue': 1}, 'metricName': 'precisionAtGivenRecall'}": 0.5714}]
+        self.assertEqual(rounded_metrics, expected_metrics,
+                         "Expected metrics: {1}; Result rounded metrics: {0};".format(expected_metrics, rounded_metrics))
 
 if __name__ == "__main__":
     unittest.main()
