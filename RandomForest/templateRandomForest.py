@@ -47,6 +47,7 @@ Instructions:
 
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, DoubleType, IntegerType, StringType
+from pyspark.sql.functions import udf
 from pyspark.ml.feature import VectorAssembler
 from pyspark.ml.tuning import ParamGridBuilder
 from pyspark.ml.classification import RandomForestClassifier
@@ -110,6 +111,11 @@ def main():
         .select(orgOutputCol, collectivePredictorCol, outerFoldCol, innerFoldCol)
     featureAssembledData.cache()
 
+    # get the predicted probability in Vector
+    def getitem(i):
+        def getitem_(v):
+            return v.array.item(i)
+        return udf(getitem_, DoubleType())
 
     # the model (pipeline)
     rf = RandomForestClassifier(featuresCol = collectivePredictorCol,
@@ -173,7 +179,8 @@ def main():
 
     # save all predictions
     predictionsFileName = resultDir_s3 + "predictionsAllData"
-    predictionsAllData.select(orgOutputCol, predictionCol)\
+    predictionsAllData.select(orgOutputCol,
+                              getitem(1)(predictionCol).alias('prob_1'))\
         .write.csv(predictionsFileName, header="true")
     # save AUC and AUPR
     auc = evaluator.evaluate(predictionsAllData,
