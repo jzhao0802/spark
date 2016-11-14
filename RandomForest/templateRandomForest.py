@@ -58,6 +58,12 @@ import time
 import datetime
 from imspacv import CrossValidatorWithStratificationID
 
+# get the predicted probability in Vector
+def getitem(i):
+    def getitem_(v):
+        return v.array.item(i)
+    return udf(getitem_, DoubleType())
+
 def main():
     # user to specify: hyper-params
     numtree = [20, 30]
@@ -111,12 +117,7 @@ def main():
         .select(orgOutputCol, collectivePredictorCol, outerFoldCol, innerFoldCol)
     featureAssembledData.cache()
 
-    # get the predicted probability in Vector
-    def getitem(i):
-        def getitem_(v):
-            return v.array.item(i)
-        return udf(getitem_, DoubleType())
-
+    
     # the model (pipeline)
     rf = RandomForestClassifier(featuresCol = collectivePredictorCol,
                                 labelCol = orgOutputCol, seed=iseed)
