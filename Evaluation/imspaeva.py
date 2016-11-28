@@ -6,6 +6,7 @@ from pyspark.ml.param import Param, Params
 from pyspark.ml.param.shared import HasLabelCol, HasRawPredictionCol
 import pyspark.sql.functions as F
 from pyspark.sql.types import DoubleType
+from pyspark.sql import SparkSession
 
 __all__ = ['BinaryClassificationEvaluatorWithPrecisionAtRecall']
 
@@ -29,8 +30,10 @@ def precision_recall_curve(labelAndVectorisedScores, rawPredictionCol, labelCol)
         .withColumn("precision", F.col("tps") / (F.col("tps") + F.col("fps") + 1e-12))
     
     # calculate recall
-    tpsFpsScorethresholds = tpsFpsScorethresholds \
-        .withColumn("recall", F.col("tps") / tpsMax)
+    dummy_pr = SparkSession.builder.getOrCreate().createDataFrame([(1,0)],["precision","recall"])
+    tpsFpsScorethresholds = dummy_pr.union(tpsFpsScorethresholds \
+                                          .withColumn("recall", F.col("tps") / tpsMax)\
+                                          .select("precision", "recall"))
     
     return tpsFpsScorethresholds
 
@@ -89,10 +92,8 @@ def _binary_clf_curve(labelAndVectorisedScores, rawPredictionCol, labelCol):
         )\
         .drop(df_max_tps_in_group[localPosProbCol])\
         .drop(df_max_tps_in_group["max_tps"])\
-        .groupBy("tps")\
+        .groupBy([localPosProbCol, "tps"])\
         .agg(F.max("index").alias("max_index"))
-    
-    # dup_removed_scores_labels = dup_removed_scores_labels.dropDuplicates(["rank"])
     
     # creating the fps column based on rank and tps column
     df_with_fps = dup_removed_scores_labels \
@@ -101,25 +102,11 @@ def _binary_clf_curve(labelAndVectorisedScores, rawPredictionCol, labelCol):
     return df_with_fps
 
 
-def nearest_values(df, desired_value):
-    dfWithDiff = df.withColumn("diff", F.col("recall") - F.lit(desired_value))
-    df_pos = dfWithDiff.filter(dfWithDiff["diff"] > 0).sort(F.asc("diff"), F.asc("precision"))
-    df_neg = dfWithDiff.filter(dfWithDiff["diff"] < 0).sort(F.asc("diff"), F.asc("precision"))
-    n_pos_rows = df_pos.count()
-    n_neg_rows = df_neg.count()
-    if (n_pos_rows == 0) & (n_neg_rows == 0):
-        raise ValueError("Finding nearest recall values failed. There are no recall values different from the desired value. ")
-    
-    first_pos = []
-    last_neg = []
-    if n_pos_rows > 0:
-        first_pos = df_pos.take(1)
-    if n_neg_rows > 0:
-        last_neg = [df_neg.collect()[-1]]
-    
-    return first_pos + last_neg
-
-
+# 1. The precision is from a pair whose recall is the closest to the desired recall. 
+# 2. If there are multiple pairs the same close to the desired recall, choose the pair
+#    with the smallest recall (thus the highest threshold).
+# 3. If there are multiple pairs satisfying 1 and 2, choose the largest precision 
+#    (again, this corresponds to the highest threshold)
 def getPrecisionByRecall(labelAndVectorisedScores,
                          rawPredictionCol,
                          labelCol,
@@ -127,36 +114,19 @@ def getPrecisionByRecall(labelAndVectorisedScores,
                          
     # get precision, recall, thresholds
     prcurve = precision_recall_curve(labelAndVectorisedScores, rawPredictionCol, labelCol)
-    prcurve_filtered = prcurve.filter(F.col('recall') == desired_recall)
+    pr_curve_with_recall_diff = prcurve\
+        .withColumn("recall_diff", F.abs(F.col("recall") - desired_recall))
+    min_recall_diff = pr_curve_with_recall_diff\
+        .agg(F.min("recall_diff")\
+        .alias("min_recall_diff"))\
+        .collect()[0].asDict()["min_recall_diff"]
+    precision = pr_curve_with_recall_diff\
+        .filter(F.abs(F.col("recall_diff") - min_recall_diff) < 1e-9)\
+        .sort("recall", F.desc("precision"))\
+        .first().asDict()["precision"]
+        
+    return precision 
     
-    # if the recall value exists then get direct precision corresponding to it
-    if (prcurve_filtered.count() > 0):
-        result = (prcurve_filtered.take(1)[0].asDict())['precision']
-        return (result)
-    
-    # if the recall does not exist in the computed values, do nearest neighbour
-    else:
-        prcurve_nearest = nearest_values(prcurve, desired_recall)
-        
-        if len(prcurve_nearest) == 1:
-            return (prcurve_nearest[0].asDict())['precision']
-        
-        abs_diff1 = abs((prcurve_nearest[0].asDict())['diff'])
-        abs_diff2 = abs((prcurve_nearest[1].asDict())['diff'])
-        
-        precision_near1 = (prcurve_nearest[0].asDict())['precision']
-        precision_near2 = (prcurve_nearest[1].asDict())['precision']
-        
-        if (abs_diff1 > abs_diff2):
-            return precision_near2
-            
-        elif (abs_diff1 < abs_diff2):
-            return precision_near1
-            
-        elif (abs_diff1 == abs_diff2):
-            return (precision_near1 + precision_near2) / 2.0
-
-
 @inherit_doc
 class BinaryClassificationEvaluatorWithPrecisionAtRecall(BinaryClassificationEvaluator, HasLabelCol, HasRawPredictionCol):
     """
@@ -226,6 +196,21 @@ class BinaryClassificationEvaluatorWithPrecisionAtRecall(BinaryClassificationEva
         self.initMetricNameValue = metricName
         self.rawPredictionColValue = rawPredictionCol
         self.labelColValue = labelCol
+        
+    def _cal_pr_curve(self, labelAndVectorisedScores):
+        """
+        Calculate the precision-recall (PR) curve. It's not a public method. 
+        Use it only when you understand what you are doing exactly. 
+        
+        The PR curve result is similar to that in sklearn and ROCR in R with minor difference. The first 
+        precision-recall pair always takes the value (1,0). 
+        
+        """
+        rawPredictionCol = self.rawPredictionColValue
+        labelCol = self.labelColValue
+        curve = precision_recall_curve(labelAndVectorisedScores, rawPredictionCol, labelCol).select("precision","recall")
+        
+        return curve
     
     def evaluate(self, dataset, params=None):
         """
@@ -286,7 +271,11 @@ class BinaryClassificationEvaluatorWithPrecisionAtRecall(BinaryClassificationEva
         resultMetricSets = []
         for params in metricSets:
             value = self.evaluate(dataset, params)
-            resultMetricSets.append({str(params):value})   
+            if len(params.keys()) == 1:
+                key = params["metricName"]
+            else:
+                key = params["metricName"] + " at recallValue " + str(params["metricParams"]["recallValue"])
+            resultMetricSets.append({key:value})   
             
         return resultMetricSets
     
