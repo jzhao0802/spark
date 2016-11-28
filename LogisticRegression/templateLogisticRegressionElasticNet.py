@@ -7,15 +7,16 @@ Instructions:
     Both the outer and the inner loops use predefined fold IDs included in the input data.
 
     Using the template, it is possible to obtain the following outputs:
-        0.1. The AUC values of all hyper-parameter sets in every outer cross-evaluation round;
+        0.1. The AUC values and other metric values of all hyper-parameter sets in every outer cross-evaluation round;
         0.2. The best hyper-parameter set in every outer cross-evaluation round;
         0.3. Predictions(probability of label 1) and true label for the entire input data (across all evaluation rounds);
         0.4. The overall AUC and AUPR values for the entire input data.
 
-1.  How to run the code: The template code depends on the module imspacv (currently in CrossValidator/imspacv.py). To run the script, do the following:
-    1.1. Put both the template script and imspacv.py under the same location; 
+1.  How to run the code: The template code depends on the modules imspacv (currently in CrossValidator/imspacv.py) and imspaeva (currently in Evaluation/imspaeva.py). 
+    To run the script, do the following:
+    1.1. Put both the template script, imspacv.py and imspaeva.py under the same location; 
     1.2. Change your current location to the location in 1.1. 
-    1.3. Execute in the command line: sudo spark-submit --deploy-mode client --master yarn --num-executors 5 --executor-cores 16 --executor-memory 19g --py-files imspacv.py templateLogisticRegressionElasticNet.py
+    1.3. Execute in the command line: sudo spark-submit --py-files imspacv.py,imspaeva.py templateLogisticRegressionElasticNet.py
 
 2.  How to update the template for different specifications:
     2.1 In general, important fields to specify are listed at the beginning of the main function.
@@ -40,9 +41,10 @@ Instructions:
         2.1.8.  The desired name for the prediction column, e.g., "probability".
         2.1.9.  The output location on both s3 and the master node, preferably different every time the program is run.
                 This could be achieved by e.g., using the current timestamp as the folder name.
+        2.1.10. Other metrics to observe during cross validation, currently in variable otherMetricSets. 
 
     2.2 Other fields to specify. The following is some possibilities but not an exhaustive list:
-        2.2.1.  Arguments for other functions such as initialising LogisticRegression, BinaryClassificationEvaluator, etc, please refer to
+        2.2.1.  Arguments for other functions such as initialising LogisticRegression, etc, please refer to
         https"//spark.apache.org/docs/2.0.0/api/python/pyspark.ml.html for details
         2.2.2.  If one needs to overwrite an existing csv file on s3, add the argument mode="overwrite" when calling DataFrame.write.csv();
         2.2.3.  One could specify the file names for various outputs
@@ -61,6 +63,7 @@ import os
 import time
 import datetime
 from imspacv import CrossValidatorWithStratificationID
+from imspaeva import BinaryClassificationEvaluatorWithPrecisionAtRecall
 
 def main():
     # user to specify: hyper-params
@@ -86,9 +89,12 @@ def main():
     # user to specify: the output location on s3
     start_time = time.time()
     st = datetime.datetime.fromtimestamp(start_time).strftime('%Y%m%d_%H%M%S')
-    resultDir_s3 = "s3://emr-rwes-pa-spark-dev-datastore/Hui/template_test/results/" + st + "/"
+    resultDir_s3 = "s3://emr-rwes-pa-spark-dev-datastore/lichao.test/Results/" + st + "/"
     # user to specify the output location on master
-    resultDir_master = "/home/hjin/template_test/results/" + st + "/"
+    resultDir_master = "/home/lichao.wang/code/lichao/test/Results/" + st + "/"
+    # other metrics to observe during cross validation
+    otherMetricSets = [{"metricName": "precisionAtGivenRecall", "metricParams": {"recallValue": 0.05}},
+                      {"metricName": "precisionAtGivenRecall", "metricParams": {"recallValue": 0.6}}]        
 
     # sanity check
     if outerFoldCol not in data.columns:
@@ -111,7 +117,7 @@ def main():
     # the model (pipeline)
     lr = LogisticRegression(maxIter=1e5, featuresCol = collectivePredictorCol,
                             labelCol = orgOutputCol, standardization = True)
-    evaluator = BinaryClassificationEvaluator(rawPredictionCol=predictionCol,
+    evaluator = BinaryClassificationEvaluatorWithPrecisionAtRecall(rawPredictionCol=predictionCol,
                                               labelCol=orgOutputCol)
     paramGrid = ParamGridBuilder()\
                .addGrid(lr.regParam, lambdas)\
@@ -131,12 +137,14 @@ def main():
         condition = featureAssembledData[outerFoldCol] == iFold
         testData = featureAssembledData.filter(condition)
         trainData = featureAssembledData.filter(~condition)
-
+        
         validator = CrossValidatorWithStratificationID(\
                         estimator=lr,
                         estimatorParamMaps=paramGrid,
                         evaluator=evaluator,
-                        stratifyCol=innerFoldCol\
+                        stratifyCol=innerFoldCol,
+                        evaluateOtherMetrics=True, 
+                        otherMetrics=otherMetricSets\
                     )
         cvModel = validator.fit(trainData)
         predictions = cvModel.transform(testData)
