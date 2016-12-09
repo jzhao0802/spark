@@ -101,21 +101,9 @@ def _binary_clf_curve(labelAndVectorisedScores, rawPredictionCol, labelCol):
     
     return df_with_fps
 
-
-# 1. The precision is from a pair whose recall is the closest to the desired recall. 
-# 2. If there are multiple pairs the same close to the desired recall, choose the pair
-#    with the smallest recall (thus the highest threshold).
-# 3. If there are multiple pairs satisfying 1 and 2, choose the largest precision 
-#    (again, this corresponds to the highest threshold)
-def getPrecisionByRecall(labelAndVectorisedScores,
-                         rawPredictionCol,
-                         labelCol,
-                         desired_recall):
-                         
-    # get precision, recall, thresholds
-    prcurve = precision_recall_curve(labelAndVectorisedScores, rawPredictionCol, labelCol)
-    pr_curve_with_recall_diff = prcurve\
-        .withColumn("recall_diff", F.abs(F.col("recall") - desired_recall))
+def getPrecisionAtOneRecallFromPRCurve(curve, recall):
+    pr_curve_with_recall_diff = curve\
+        .withColumn("recall_diff", F.abs(F.col("recall") - recall))
     min_recall_diff = pr_curve_with_recall_diff\
         .agg(F.min("recall_diff")\
         .alias("min_recall_diff"))\
@@ -126,6 +114,29 @@ def getPrecisionByRecall(labelAndVectorisedScores,
         .first().asDict()["precision"]
         
     return precision 
+    
+    
+# 1. The precision is from a pair whose recall is the closest to the desired recall. 
+# 2. If there are multiple pairs the same close to the desired recall, choose the pair
+#    with the smallest recall (thus the highest threshold).
+# 3. If there are multiple pairs satisfying 1 and 2, choose the largest precision 
+#    (again, this corresponds to the highest threshold)
+def getPrecisionAtOneRecall(labelAndVectorisedScores,
+                         rawPredictionCol,
+                         labelCol,
+                         desired_recall):                         
+    # get precision, recall, thresholds
+    prcurve = precision_recall_curve(labelAndVectorisedScores, rawPredictionCol, labelCol)
+    precision = getPrecisionAtOneRecallFromPRCurve(prcurve, desired_recall)
+        
+    return precision 
+
+def getPrecisionAtMultipleRecalls(labelAndVectorisedScores,
+                         rawPredictionCol,
+                         labelCol,
+                         desired_recalls):
+    prcurve = precision_recall_curve(labelAndVectorisedScores, rawPredictionCol, labelCol)
+    return map(lambda x: getPrecisionAtOneRecallFromPRCurve(prcurve, x), desired_recalls)
     
 @inherit_doc
 class BinaryClassificationEvaluatorWithPrecisionAtRecall(BinaryClassificationEvaluator, HasLabelCol, HasRawPredictionCol):
@@ -179,7 +190,7 @@ class BinaryClassificationEvaluatorWithPrecisionAtRecall(BinaryClassificationEva
             
         elif (metricName == "precisionAtGivenRecall"):
             self.metricParams = Param(
-                self, "metricParams", "additional parameters for calculating the metric, such as the recall value in getPrecisionByRecall")
+                self, "metricParams", "additional parameters for calculating the metric, such as the recall value in getPrecisionAtOneRecall")
             self.metricName = Param(self, "metricName",
                                     "metric name in evaluation (areaUnderROC|areaUnderPR)")
             self._setDefault(rawPredictionCol="rawPrediction", labelCol="label",
@@ -228,17 +239,17 @@ class BinaryClassificationEvaluatorWithPrecisionAtRecall(BinaryClassificationEva
                 return super(BinaryClassificationEvaluatorWithPrecisionAtRecall.__mro__[1], self).evaluate(dataset)
             else:
                 if "recallValue" in self.initMetricParams.keys():
-                    return getPrecisionByRecall(dataset,
+                    return getPrecisionAtOneRecall(dataset,
                                                 self.rawPredictionColValue,
                                                 self.labelColValue,
                                                 self.initMetricParams["recallValue"])
                 else:
                     raise ValueError("To compute 'precisionAtGivenRecall', metricParams must include the key 'recallValue'.")
         elif (isinstance(params, dict)):
-            if ("precisionAtGivenRecall" in params.values()):
+            if "precisionAtGivenRecall" in params.values():
                 if "metricParams" in params.keys():
                     if "recallValue" in params["metricParams"].keys():
-                        return getPrecisionByRecall(dataset,
+                        return getPrecisionAtOneRecall(dataset,
                                                     self.rawPredictionColValue,
                                                     self.labelColValue,
                                                     params["metricParams"]["recallValue"])
@@ -246,6 +257,18 @@ class BinaryClassificationEvaluatorWithPrecisionAtRecall(BinaryClassificationEva
                         raise ValueError("To compute 'precisionAtGivenRecall', metricParams must include the key 'recallValue'.")
                 else:
                     raise ValueError("When 'precisionAtGivenRecall' is specified calling the evaluate() method, " + \
+                                     "'metricParams' must also be specified.")
+            elif "precisionAtGivenMultipleRecalls" in params.values():
+                if "metricParams" in params.keys():
+                    if "recallValues" in params["metricParams"].keys():
+                        return getPrecisionAtMultipleRecalls(dataset,
+                                                    self.rawPredictionColValue,
+                                                    self.labelColValue,
+                                                    params["metricParams"]["recallValues"])
+                    else:
+                        raise ValueError("To compute 'precisionAtGivenMultipleRecalls', metricParams must include the key 'recallValues'.")
+                else:
+                    raise ValueError("When 'precisionAtGivenMultipleRecalls' is specified calling the evaluate() method, " + \
                                      "'metricParams' must also be specified.")
             else:
                 return super(BinaryClassificationEvaluatorWithPrecisionAtRecall.__mro__[1], self).evaluate(dataset, params)
@@ -268,14 +291,28 @@ class BinaryClassificationEvaluatorWithPrecisionAtRecall(BinaryClassificationEva
             metricSets = [{"metricName": "areaUnderROC"},
                           {"metricName": "areaUnderPR"},
                           {"metricName": "precisionAtGivenRecall", "metricParams": {"recallValue": 0.05}}]            
-        resultMetricSets = []
-        for params in metricSets:
-            value = self.evaluate(dataset, params)
-            if len(params.keys()) == 1:
-                key = params["metricName"]
-            else:
-                key = params["metricName"] + " at recallValue " + str(params["metricParams"]["recallValue"])
-            resultMetricSets.append({key:value})   
+        resultMetricSets = [None for _ in range(len(metricSets))]
+        pagrs = []
+        for i in range(len(metricSets)):
+            params = metricSets[i]
+            if params["metricName"] != "precisionAtGivenRecall":
+                value = self.evaluate(dataset, params)
+                if len(params.keys()) == 1:
+                    key = params["metricName"]
+                else:
+                    key = params["metricName"] + " at recallValue " + str(params["metricParams"]["recallValue"])
+                resultMetricSets[i] = {key:value}
+            else: 
+                pagrs.append([i,params["metricParams"]["recallValue"]])
+                continue
+        if None in resultMetricSets:
+            pr_params = {"metricName": "precisionAtGivenMultipleRecalls", "metricParams": {"recallValues": [x[1] for x in pagrs]}}
+            precisions = self.evaluate(dataset, pr_params)
+            i = 0
+            for item in pagrs:
+                key = "precisionAtGivenRecall" + " at recallValue " + str(pagrs[i][1])
+                resultMetricSets[item[0]] = {key:precisions[i]}
+                i += 1          
             
         return resultMetricSets
     
@@ -316,7 +353,7 @@ class BinaryClassificationEvaluatorWithPrecisionAtRecall(BinaryClassificationEva
         tmp = getattr(self, "metricParams", None)
         if tmp is None:
             self.metricParams = Param(self, "metricParams",
-                "additional parameters for calculating the metric, such as the recall value in getPrecisionByRecall")
+                "additional parameters for calculating the metric, such as the recall value in getPrecisionAtOneRecall")
         kwargs = self.setParams._input_kwargs
         self.initMetricParams = metricParams
         self.initMetricNameValue = metricName
