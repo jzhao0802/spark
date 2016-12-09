@@ -1,83 +1,67 @@
 import numpy as np
-from pyspark import SparkContext, SQLContext
-from pyspark.sql.functions import explode, count
+# from pyspark import SparkContext, SQLContext
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import explode, count, udf
 
 import unittest
 
-def AppendDataMatchingFoldIDs(data, nFolds, nDesiredPartitions="None"):
-    """
-    Select three columns ("matched_positive_id", "label", "features") 
-    and then append a column of stratified fold IDs to the input 
-    DataFrame.
+__all__ = ["AppendDataMatchingFoldIDs"]
 
+def AppendDataMatchingFoldIDs(data, nFolds, matchCol, foldCol="foldID", colsToKeep=None, nDesiredPartitions=None):
+    """
+    Select columns and then append a column of stratified fold IDs to the 
+    input DataFrame.
+    
     Parameters
     ----------
     data: pyspark.sql.dataframe.DataFrame
         The input DataFrame.
-    labelCol: string
-        The column name of the label. Default: "label".
     nFolds: integer
         The number of foldds to stratify.
-    nDesiredPartitions: integer or "None".
+    matchCol: string
+        The name of the column about which rows are matched (e.g., one row 
+        with the positive outcome is matched with a number of rows with the
+        negative outcome)
+    foldCol: string
+        The name of the appended column of fold IDs. The default is "foldID". 
+    colsToKeep: list of strings
+        The list of column names to keep in the input DataFrame. If None 
+        (default), all input columns are kept. 
+    nDesiredPartitions: integer or None.
         The number of partitions in the returned DataFrame. If "None",
         the result has the same number of partitions as the input data.
         Default: "None".
-
+    
     Returns
     ----------
-    A pyspark.sql.DataFrame with 4 columns: three columns 
-    ("matched_positive_id", "label", "features") from the original 
-    DataFrame and a column appended to the input data
-    as the fold ID. The column name of the fold ID is "foldID".
+    A pyspark.sql.DataFrame with the following columns: columns indicated by 
+    colsToKeep from the input DataFrame and the appended fold ID column. 
     """
-    sc = SparkContext._active_spark_context
-    sqlContext = SQLContext(sc)
     
-    # selecting the required columns (dropping the 'indexed' column)
-    data = data.select('matched_positive_id', 'label', 'features')
+    if colsToKeep is not None: 
+        data = data.select(list(set(colsToKeep + [matchCol])))
     
-    if nDesiredPartitions == "None":
+    if foldCol in data.columns: 
+        raise ValueError("foldCol {} already exists in the input data.".format(foldCol))
+    
+    if nDesiredPartitions is None:
         nDesiredPartitions = data.rdd.getNumPartitions()
     
-    # Group by key, where key is matched_positive_id
-    data_rdd = data.rdd.map(lambda (x, y, z): (x, (y, z))) \
-        .groupByKey() \
-        .map(lambda x: (x[0], list(x[1])))
-    
-    # getting the count of positive after grouping
-    nPoses = data_rdd.count()
-    npFoldIDsPos = np.array(list(range(nFolds)) * np.ceil(float(nPoses) / nFolds))
-    
-    # select the actual numbers of FoldIds matching the count of positive data points
-    npFoldIDs = npFoldIDsPos[:nPoses]
-    
-    # Shuffle the foldIDs to give randomness
+    uniqueMatchIDs = data\
+        .select(matchCol)\
+        .distinct()\
+        .collect()
+    uniqueMatchIDs = [x.asDict()[matchCol] for x in uniqueMatchIDs]
+    nPoses = len(uniqueMatchIDs)
+    npFoldIDs = np.array(list(range(nFolds)) * np.ceil(float(nPoses) / nFolds))    
+    npFoldIDs = npFoldIDs[:nPoses]    
     np.random.shuffle(npFoldIDs)
-    
-    rddFoldIDs = sc.parallelize(npFoldIDs, nDesiredPartitions).map(int)
-    dfDataWithIndex = data_rdd.zipWithIndex() \
-        .toDF() \
-        .withColumnRenamed("_1", "orgData")
-    dfNewKeyWithIndex = rddFoldIDs.zipWithIndex() \
-        .toDF() \
-        .withColumnRenamed("_1", "key")
-    dfJoined = dfDataWithIndex.join(dfNewKeyWithIndex, "_2") \
-        .select('orgData._1', 'orgData._2', 'key') \
-        .withColumnRenamed('key', 'foldID') \
+    result = SparkSession.builder.getOrCreate()\
+        .createDataFrame([(int(npFoldIDs[i]),uniqueMatchIDs[i]) for i in range(nPoses)], [foldCol, matchCol])\
+        .join(data, matchCol)\
         .coalesce(nDesiredPartitions)
     
-    """explding the features and label column,
-     which means grouped data of labels and features will be expanded.
-     In short, grouped data by matched_positive_id will be expanded."""
-    dfExpanded = dfJoined.select(dfJoined._1, explode(dfJoined._2).alias("label_features"), dfJoined.foldID)
-    
-    # selecting the column with required meaningful names
-    dfWithFoldID = dfExpanded.select(dfExpanded["_1"].alias("matched_positive_id"), 
-                                     dfExpanded["label_features"]["_2"].alias("features"), 
-                                     dfExpanded["foldID"], 
-                                     dfExpanded["label_features"]["_1"].alias("label"))
-    
-    return dfWithFoldID
+    return result
     
 def areFoldIdsEqual(ids):
     if len(set(ids)) == 1:
@@ -89,18 +73,15 @@ class StratificationTests(unittest.TestCase):
     
     @classmethod
     def setUpClass(cls):
-        cls.sc = SparkContext(appName=cls.__name__)
-        cls.sqlContext = SQLContext(cls.sc)
-        cls.testData = cls.sqlContext.read.load("s3://emr-rwes-pa-spark-dev-datastore/lichao.test/data/toy_data/matchedID_label_features.csv",
-                              format='com.databricks.spark.csv',
-                              header='true',
-                              inferSchema='true')
+        cls.spark = SparkSession.builder.appName(cls.__name__).getOrCreate()
+        cls.testData = cls.spark.read.option("header", "true")\
+            .option("inferSchema", "true")\
+            .csv("s3://emr-rwes-pa-spark-dev-datastore/lichao.test/data/toy_data/matchedID_label_features.csv")        
         cls.testData.cache()
-        # cls.nData = cls.testData.count()
         
     @classmethod
     def tearDownClass(cls):
-        cls.sc.stop()
+        cls.spark.stop()
         
     def GetNumDistinctMatchedPosIDs(self, df):
         return df.select("foldID", "matched_positive_id")\
@@ -113,7 +94,8 @@ class StratificationTests(unittest.TestCase):
         # 5 different matched_positive_ids
         # 2 folds
         nFolds = 2
-        dataWithFoldID_2 = AppendDataMatchingFoldIDs(data=StratificationTests.testData, nFolds=nFolds)
+        dataWithFoldID_2 = AppendDataMatchingFoldIDs(data=StratificationTests.testData, nFolds=nFolds, 
+                                                     matchCol="matched_positive_id", colsToKeep=["matched_positive_id", "label", "features"])
         # those with the same matched_positive_id should have the same fold ID
         
         self.assertTrue(\
@@ -146,7 +128,8 @@ class StratificationTests(unittest.TestCase):
         
         # one matched_positive_id for each fold
         nFolds = 5
-        dataWithFoldID_5 = AppendDataMatchingFoldIDs(data=StratificationTests.testData, nFolds=nFolds)
+        dataWithFoldID_5 = AppendDataMatchingFoldIDs(data=StratificationTests.testData, nFolds=nFolds,
+                                                     matchCol="matched_positive_id", colsToKeep=["matched_positive_id", "label", "features"])
         nMatchedPosIDs = self.GetNumDistinctMatchedPosIDs(dataWithFoldID_5)
         self.assertTrue(\
             nMatchedPosIDs == [1]*5,
@@ -159,7 +142,9 @@ class StratificationTests(unittest.TestCase):
         dataWithFoldID_22 = \
             AppendDataMatchingFoldIDs(\
                 data=StratificationTests.testData.filter(StratificationTests.testData.matched_positive_id != 0), 
-                nFolds=nFolds
+                nFolds=nFolds,
+                matchCol="matched_positive_id", 
+                colsToKeep=["matched_positive_id", "label", "features"]
             )
         nMatchedPosIDs = self.GetNumDistinctMatchedPosIDs(dataWithFoldID_22)
         self.assertTrue(\

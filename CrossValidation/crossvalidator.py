@@ -3,7 +3,7 @@ import time
 import datetime
 import random
 import numpy as np
-from pyspark import SparkContext
+from pyspark.sql import SparkSession
 from pyspark.ml.param import Params, Param
 from pyspark.ml import Estimator
 from pyspark import keyword_only
@@ -149,7 +149,9 @@ class CrossValidatorWithStratification(Estimator):
         eva = self.getOrDefault(self.evaluator)
         nFolds = self.getOrDefault(self.numFolds)
         idColName = "foldID"
-        dataWithFoldID = AppendDataMatchingFoldIDs(data=dataset, nFolds=nFolds)
+        dataWithFoldID = AppendDataMatchingFoldIDs(data=dataset, nFolds=nFolds,
+                                                   matchCol="matched_positive_id", 
+                                                   colsToKeep=["matched_positive_id", "label", "features"])
         dataWithFoldID.cache()
         self.metrics = np.zeros(numModels)
     
@@ -208,8 +210,6 @@ class CrossValidatorWithStratification(Estimator):
         return newCV
 
 def _Test():
-    from pyspark import SQLContext
-
     #input parameters
     pos_file = "dat_hae.csv"
     neg_file = "dat_nonhae.csv"
@@ -222,9 +222,7 @@ def _Test():
     num_depth = 2
     nFolds = 3
 
-    #creating SparkContext and HiveContext
-    sc = SparkContext(appName="Test")
-    sqlContext = SQLContext(sc)
+    spark = SparkSession.builder.appName("CrossValidatorTestRun").getOrCreate()
 
     s3_path = "s3://emr-rwes-pa-spark-dev-datastore/lichao.test/"
     data_path = "s3://emr-rwes-pa-spark-dev-datastore/Hui/datafactz_test/01_data/"
@@ -242,15 +240,12 @@ def _Test():
     random.seed(seed)
 
     #reading in the data from S3
-    pos = sqlContext.read.load((data_path + pos_file),
-                              format='com.databricks.spark.csv',
-                              header='true',
-                              inferSchema='true')
-
-    neg = sqlContext.read.load((data_path + neg_file),
-                              format='com.databricks.spark.csv',
-                              header='true',
-                              inferSchema='true')
+    pos = spark.read.option("header", "true")\
+        .option("inferSchema", "true")\
+        .csv(data_path + pos_file)  
+    neg = spark.read.option("header", "true")\
+        .option("inferSchema", "true")\
+        .csv(data_path + neg_file) 
     #get the column names
     pos_col = pos.columns
     neg_col = neg.columns
@@ -278,7 +273,9 @@ def _Test():
 
     data = pos_ori.unionAll(neg_ori)
 
-    dataWithFoldID = AppendDataMatchingFoldIDs(data=data, nFolds=nFolds)
+    dataWithFoldID = AppendDataMatchingFoldIDs(data=data, nFolds=nFolds, 
+                                               matchCol="matched_positive_id", 
+                                               colsToKeep=["matched_positive_id", "label", "features"])
     dataWithFoldID.cache()
 
     # iteration through all folds
@@ -349,12 +346,14 @@ def _Test():
     #fFinished = open(resultDir_master + "finished.txt", "a")
     #fFinished.write("Test for {} finished. Please manually check the result.. \n".format(data_file))
     #fFinished.close()
-
+    
     print crossval.getBestModelParms()
 
     print("------------------------------------------")
     print("--- PROGRAM COMPLETED SUCCESSFULLY !!! ---")
     print("------------------------------------------")
+    
+    spark.stop()
 
 
 if __name__ == "__main__":
