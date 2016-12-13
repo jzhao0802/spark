@@ -223,6 +223,9 @@ class BinaryClassificationEvaluatorWithPrecisionAtRecall(BinaryClassificationEva
         
         return curve
     
+    def isLargerBetter(self):
+        return True
+    
     def evaluate(self, dataset, params=None):
         """
         evaluate(self, dataset, params=None)
