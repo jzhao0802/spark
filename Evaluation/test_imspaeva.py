@@ -60,7 +60,11 @@ class PREvaluationMetricTests(unittest.TestCase):
         self.assertTrue((0.8372 - self.tolerance) <= PR <= (0.8372 + self.tolerance), "Area under PR value is incorrect.")
 
     def test_PR_isLargeBetter(self):
-        evaluator = BinaryClassificationEvaluatorWithPrecisionAtRecall()
+        evaluator = BinaryClassificationEvaluatorWithPrecisionAtRecall(metricName="areaUnderPR")
+        self.assertTrue(evaluator.isLargerBetter(), "method isLargerBetter() returning false.")
+    
+    def test_PrecisionAtGivenRecall_isLargerBetter(self):
+        evaluator = BinaryClassificationEvaluatorWithPrecisionAtRecall(metricName="precisionAtGivenRecall",metricParams={"recallValue":0.05})
         self.assertTrue(evaluator.isLargerBetter(), "method isLargerBetter() returning false.")
 
     def test_is_precision_matching_1(self):
