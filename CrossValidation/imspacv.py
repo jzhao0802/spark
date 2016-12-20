@@ -90,14 +90,15 @@ class CrossValidatorWithStratificationID(CrossValidator):
     stratifyCol = Param(Params._dummy(), "stratifyCol", "column name of the stratification ID")
     evaluateOtherMetrics = Param(Params._dummy(), "evaluateOtherMetrics", "Boolean flag whether to evaluate with other metrics")
     otherMetrics = Param(Params._dummy(), "otherMetrics", "dictionary specifying other metrics to evaluate")
+    calculateBestPreds = Param(Params._dummy(), "calculateBestPreds", "Boolean flag whether to calculate predictions from different folds using the selected best hyper-parameters")
     
     
     @keyword_only
     def __init__(self, estimator=None, estimatorParamMaps=None, evaluator=None, stratifyCol=None, 
-                 evaluateOtherMetrics=False, otherMetrics=None):
+                 evaluateOtherMetrics=False, otherMetrics=None, calculateBestPreds=False):
         """
         __init__(self, estimator=None, estimatorParamMaps=None, evaluator=None, stratifyCol=None,
-                 evaluateOtherMetrics=False, otherMetrics=None)
+                 evaluateOtherMetrics=False, otherMetrics=None, calculateBestPreds=False)
         """     
         if stratifyCol is None:
             raise ValueError("stratifyCol must be specified.")        
@@ -106,17 +107,17 @@ class CrossValidatorWithStratificationID(CrossValidator):
         if evaluateOtherMetrics:
             if not isinstance(evaluator, BinaryClassificationEvaluatorWithPrecisionAtRecall):
                 raise TypeError("When evaluateOtherMetrics is set True, the evaluator must be of class BinaryClassificationEvaluatorWithPrecisionAtRecall.")        
-        self._setDefault(evaluateOtherMetrics=False, otherMetrics=None)
+        self._setDefault(evaluateOtherMetrics=False, otherMetrics=None, calculateBestPreds=False)
         kwargs = self.__init__._input_kwargs
         self._set(**kwargs)
         
     @keyword_only
     @since("1.4.0")
     def setParams(self, estimator=None, estimatorParamMaps=None, evaluator=None, stratifyCol=None,
-                  evaluateOtherMetrics=False, otherMetrics=None):
+                  evaluateOtherMetrics=False, otherMetrics=None, calculateBestPreds=False):
         """
         setParams(self, estimator=None, estimatorParamMaps=None, evaluator=None, stratifyCol=None,
-                  evaluateOtherMetrics=False, otherMetrics=None):
+                  evaluateOtherMetrics=False, otherMetrics=None, calculateBestPreds=False):
         Sets params for cross validator.
         """
         kwargs = self.setParams._input_kwargs
@@ -236,7 +237,14 @@ class CrossValidatorWithStratificationID(CrossValidator):
         # convert list to pyspark.sql.DataFrame
         df = SQLContext.getOrCreate(SparkContext.getOrCreate()).createDataFrame(listMetricValueEveryParamSet, colnamesMetricValueEveryParamSet)
         df = df.withColumn(df.columns[0], df[df.columns[0]].cast(IntegerType()))
-        return CrossValidatorModel(self.bestModel, df)
+        
+        calculateBestPreds = self.getOrDefault(self.calculateBestPreds)
+        if calculateBestPreds:
+            bestPreds = self._calBestPreds(dataWithFoldID)
+        else:
+            bestPreds = None        
+        
+        return CrossValidatorModelWithBestPreds(self.bestModel, df, bestPreds)
         
     #returns the hyperparameters of the best model chosen by the cross validator
     def getBestModelParams(self):
@@ -245,8 +253,67 @@ class CrossValidatorWithStratificationID(CrossValidator):
         if (self.bestIndex is not None):
             bestModelParms = dict((key.name, value) for key, value in epm[self.bestIndex].iteritems())
         else:
-            bestModelParms = "\nCrossvalidation has not run yet.\n"
-        return bestModelParms       
+            raise AttributeError("bestModelParms doesn't exist because Crossvalidation has not been run yet. ")
+            
+        return bestModelParms   
+    
+    def _calBestPreds(self, dataset):
+        epm = self.getOrDefault(self.estimatorParamMaps)
+        best_params = epm[self.bestIndex]
+    
+        stratifyCol = self.getOrDefault(self.stratifyCol)
+        nFolds = dataset.select(stratifyCol).distinct().count()
+        
+        est = self.getOrDefault(self.estimator)
+        featuresCol = est.getFeaturesCol()
+        labelCol = est.getLabelCol()
+        
+        for i in range(nFolds):
+            condition = (dataset[stratifyCol] == i)    
+            validation = dataset.filter(condition)
+            train = dataset.filter(~condition)
+            model = est.fit(train, best_params)
+            transformed_data = model.transform(validation)
+            
+            if i == 0:
+                preds = transformed_data
+            else:
+                preds = preds.union(transformed_data)
+                
+        return preds
+        
+
+class CrossValidatorModelWithBestPreds(CrossValidatorModel):
+    def __init__(self, bestModel, avgMetrics=[], bestPreds=None):
+        super(CrossValidatorModel, self).__init__()
+        #: best model from cross validation
+        self.bestModel = bestModel
+        #: Average cross-validation metrics for each paramMap in
+        #: CrossValidator.estimatorParamMaps, in the corresponding order.
+        self.avgMetrics = avgMetrics
+        #
+        self.bestPreds = bestPreds
+    
+    def _transform(self, dataset):
+        return self.bestModel.transform(dataset)
+    
+    @since("1.4.0")
+    def copy(self, extra=None):
+        """
+        Creates a copy of this instance with a randomly generated uid
+        and some extra params. This copies the underlying bestModel,
+        creates a deep copy of the embedded paramMap, and
+        copies the embedded and extra parameters over.
+    
+        :param extra: Extra parameters to copy to the new instance
+        :return: Copy of this instance
+        """
+        if extra is None:
+            extra = dict()
+        bestModel = self.bestModel.copy(extra)
+        avgMetrics = self.avgMetrics
+        bestPreds = self.bestPreds
+        return CrossValidatorModelWithBestPreds(bestModel, avgMetrics, bestPreds)
     
         
 import unittest
@@ -284,6 +351,30 @@ class CrossValidatorWithStratificationIDTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.spark.stop()
         
+    def test_bestPreds(self):
+        assembler = VectorAssembler(inputCols=self.data.columns[1:(-1)], outputCol="features")
+        stratifyCol = "foldID"
+        featureAssembledData = assembler.transform(self.data).select("y", "features", stratifyCol)   
+        lr = LinearRegression(maxIter=1e5, standardization=True, 
+                              featuresCol="features", labelCol="y")
+        evaluator = RegressionEvaluator(predictionCol="prediction", labelCol="y")
+        lambdas = [0.1,1]
+        alphas = [0,0.5]
+        paramGrid = ParamGridBuilder()\
+               .addGrid(lr.regParam, lambdas)\
+               .addGrid(lr.elasticNetParam, alphas)\
+               .build()   
+        validator = CrossValidatorWithStratificationID(estimator=lr,
+                              estimatorParamMaps=paramGrid,
+                              evaluator=evaluator,
+                              stratifyCol=stratifyCol,
+                              calculateBestPreds=True)
+        cvModel = validator.fit(featureAssembledData)
+        bestPreds = cvModel.bestPreds
+        
+        self.assertEqual(bestPreds.columns, ["features", "y", "foldID", "prediction"], "Incorrect columns in bestPreds")
+        self.assertEqual(bestPreds.distinct().count(), 100, "Incorrect number of distinct rows in bestPreds")
+    
     def test_CVResult(self):
         assembler = VectorAssembler(inputCols=self.data.columns[1:(-1)], outputCol="features")
         stratifyCol = "foldID"
