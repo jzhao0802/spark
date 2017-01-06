@@ -91,14 +91,16 @@ class CrossValidatorWithStratificationID(CrossValidator):
     evaluateOtherMetrics = Param(Params._dummy(), "evaluateOtherMetrics", "Boolean flag whether to evaluate with other metrics")
     otherMetrics = Param(Params._dummy(), "otherMetrics", "dictionary specifying other metrics to evaluate")
     calculateBestPreds = Param(Params._dummy(), "calculateBestPreds", "Boolean flag whether to calculate predictions from different folds using the selected best hyper-parameters")
-    
+    otherColsToInclude = Param(Params._dummy(), "otherColsToInclude", "column names other than features, labelCol and stratifyCol to be included in the returned bestPreds")
     
     @keyword_only
     def __init__(self, estimator=None, estimatorParamMaps=None, evaluator=None, stratifyCol=None, 
-                 evaluateOtherMetrics=False, otherMetrics=None, calculateBestPreds=False):
+                 evaluateOtherMetrics=False, otherMetrics=None,
+                 calculateBestPreds=False, otherColsToInclude=None):
         """
         __init__(self, estimator=None, estimatorParamMaps=None, evaluator=None, stratifyCol=None,
-                 evaluateOtherMetrics=False, otherMetrics=None, calculateBestPreds=False)
+                 evaluateOtherMetrics=False, otherMetrics=None,
+                 calculateBestPreds=False, otherColsToInclude=None)
         """     
         if stratifyCol is None:
             raise ValueError("stratifyCol must be specified.")        
@@ -107,17 +109,20 @@ class CrossValidatorWithStratificationID(CrossValidator):
         if evaluateOtherMetrics:
             if not isinstance(evaluator, BinaryClassificationEvaluatorWithPrecisionAtRecall):
                 raise TypeError("When evaluateOtherMetrics is set True, the evaluator must be of class BinaryClassificationEvaluatorWithPrecisionAtRecall.")        
-        self._setDefault(evaluateOtherMetrics=False, otherMetrics=None, calculateBestPreds=False)
+        self._setDefault(evaluateOtherMetrics=False, otherMetrics=None,
+                         calculateBestPreds=False, otherColsToInclude=None)
         kwargs = self.__init__._input_kwargs
         self._set(**kwargs)
         
     @keyword_only
     @since("1.4.0")
     def setParams(self, estimator=None, estimatorParamMaps=None, evaluator=None, stratifyCol=None,
-                  evaluateOtherMetrics=False, otherMetrics=None, calculateBestPreds=False):
+                  evaluateOtherMetrics=False, otherMetrics=None,
+                  calculateBestPreds=False, otherColsToInclude=None):
         """
         setParams(self, estimator=None, estimatorParamMaps=None, evaluator=None, stratifyCol=None,
-                  evaluateOtherMetrics=False, otherMetrics=None, calculateBestPreds=False):
+                  evaluateOtherMetrics=False, otherMetrics=None,
+                  calculateBestPreds=False, otherColsToInclude=None):
         Sets params for cross validator.
         """
         kwargs = self.setParams._input_kwargs
@@ -164,7 +169,12 @@ class CrossValidatorWithStratificationID(CrossValidator):
         # select features, label and foldID in order
         featuresCol = est.getFeaturesCol()
         labelCol = est.getLabelCol()
-        dataWithFoldID = dataset.select(featuresCol, labelCol, stratifyCol)
+        otherColsToInclude = self.getOrDefault(self.otherColsToInclude)
+        if otherColsToInclude==None:
+            dataWithFoldID = dataset.select(featuresCol, labelCol, stratifyCol)
+        else:
+            dataWithFoldID = dataset.select([featuresCol, labelCol,
+                                            stratifyCol] + otherColsToInclude)
         
         paramNames = [x.name for x in epm[0].keys()]
         metricValueColForCV = "metric for CV " + eva.getMetricName()
@@ -352,9 +362,16 @@ class CrossValidatorWithStratificationIDTests(unittest.TestCase):
         cls.spark.stop()
         
     def test_bestPreds(self):
-        assembler = VectorAssembler(inputCols=self.data.columns[1:(-1)], outputCol="features")
+        dataFileName = "s3://emr-rwes-pa-spark-dev-datastore/lichao.test/data/toy_data/datasetWithFoldIDPrimKey.csv"
+        data = self.spark\
+                  .read\
+                  .option("header", "true")\
+                  .option("inferSchema", "true")\
+                  .csv(dataFileName)      
+        assembler = VectorAssembler(inputCols=data.columns[1:(-1)], outputCol="features")
         stratifyCol = "foldID"
-        featureAssembledData = assembler.transform(self.data).select("y", "features", stratifyCol)   
+        otherColsToInclude = ["primaryKey"]
+        featureAssembledData = assembler.transform(data).select(["y", "features", stratifyCol] + otherColsToInclude)   
         lr = LinearRegression(maxIter=1e5, standardization=True, 
                               featuresCol="features", labelCol="y")
         evaluator = RegressionEvaluator(predictionCol="prediction", labelCol="y")
@@ -368,12 +385,14 @@ class CrossValidatorWithStratificationIDTests(unittest.TestCase):
                               estimatorParamMaps=paramGrid,
                               evaluator=evaluator,
                               stratifyCol=stratifyCol,
-                              calculateBestPreds=True)
+                              calculateBestPreds=True,
+                              otherColsToInclude=otherColsToInclude)
         cvModel = validator.fit(featureAssembledData)
         bestPreds = cvModel.bestPreds
         
-        self.assertEqual(bestPreds.columns, ["features", "y", "foldID", "prediction"], "Incorrect columns in bestPreds")
+        self.assertEqual(bestPreds.columns, ["features", "y", "foldID", "primaryKey", "prediction"], "Incorrect columns in bestPreds. bestPreds.columns: {}".format(bestPreds.columns))
         self.assertEqual(bestPreds.distinct().count(), 100, "Incorrect number of distinct rows in bestPreds")
+        self.assertEqual(bestPreds.drop("prediction").drop("features").subtract(featureAssembledData.select(["y", "foldID", "primaryKey"])).count(), 0, "Result dataframe didn't keep the label, foldID and primary key columns correctly.")
     
     def test_CVResult(self):
         assembler = VectorAssembler(inputCols=self.data.columns[1:(-1)], outputCol="features")
