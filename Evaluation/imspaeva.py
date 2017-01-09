@@ -39,10 +39,30 @@ def precision_recall_curve(labelAndVectorisedScores, rawPredictionCol, labelCol)
 
 
 def _binary_clf_curve(labelAndVectorisedScores, rawPredictionCol, labelCol):
+    
     # sort the dataframe by pred column in descending order
     localPosProbCol = "pos_probability"
     labelAndPositiveProb = labelAndVectorisedScores.select(labelCol, getitem(1)(rawPredictionCol).alias(localPosProbCol))
-    sortedScoresAndLabels = labelAndPositiveProb.sort(F.desc(localPosProbCol))
+    
+    # round the fractional prediction column
+    labelAndPositiveProb = labelAndPositiveProb\
+        .withColumn("_tmp_pred", F.round(localPosProbCol, 3))\
+        .drop(localPosProbCol)\
+        .withColumnRenamed("_tmp_pred", localPosProbCol)\
+        .sort(F.desc(localPosProbCol))
+    
+    # adding index to the dataframe
+    sortedScoresAndLabels = labelAndPositiveProb.rdd.zipWithIndex() \
+        .toDF(['data', 'index']) \
+        .select('data.' + labelCol, 'data.' + localPosProbCol, "index")
+    
+    groupSumLabelCol = "group_sum_labels"
+    groupMaxIndexCol = "group_max_indices"
+    sortedScoresAndLabels = sortedScoresAndLabels\
+        .groupBy([localPosProbCol, labelCol])\
+        .agg(F.sum(labelCol).alias(groupSumLabelCol), F.max("index").alias(groupMaxIndexCol))
+    
+    # sortedScoresAndLabels = labelAndPositiveProb.sort(F.desc(localPosProbCol))
     
     # creating rank for pred column
     lookup = (sortedScoresAndLabels.select(localPosProbCol)
@@ -57,12 +77,9 @@ def _binary_clf_curve(labelAndVectorisedScores, rawPredictionCol, labelCol):
     sortedScoresAndLabels = sortedScoresAndLabels.join(lookup, [localPosProbCol])
     
     # sorting in descending order based on the pred column
-    sortedScoresAndLabels = sortedScoresAndLabels.sort(F.desc(localPosProbCol))
+    sortedScoresAndLabels = sortedScoresAndLabels.sort(groupMaxIndexCol)
     
-    # adding index to the dataframe
-    sortedScoresAndLabels = sortedScoresAndLabels.rdd.zipWithIndex() \
-        .toDF(['data', 'index']) \
-        .select('data.' + labelCol, 'data.' + localPosProbCol, 'data.rank', 'index')
+    
     
     # saving the dataframe to temporary table
     sortedScoresAndLabels.registerTempTable("processeddata")
@@ -72,7 +89,7 @@ def _binary_clf_curve(labelAndVectorisedScores, rawPredictionCol, labelCol):
     # A temporary solution for Spark 1.5.2
     sortedScoresAndLabelsCumSum = labelAndVectorisedScores.sql_ctx \
         .sql(
-        "SELECT " + labelCol + ", " + localPosProbCol + ", rank, index, sum(" + labelCol + ") OVER (ORDER BY index) as tps FROM processeddata ")
+        "SELECT " + labelCol + ", " + localPosProbCol + ", " + groupSumLabelCol + ", rank, " + groupMaxIndexCol + ", sum(" + groupSumLabelCol + ") OVER (ORDER BY " + groupMaxIndexCol + ") as tps FROM processeddata ")
     
     # repartitioning
     sortedScoresAndLabelsCumSum = sortedScoresAndLabelsCumSum.coalesce(partition_size)
@@ -93,7 +110,7 @@ def _binary_clf_curve(labelAndVectorisedScores, rawPredictionCol, labelCol):
         .drop(df_max_tps_in_group[localPosProbCol])\
         .drop(df_max_tps_in_group["max_tps"])\
         .groupBy([localPosProbCol, "tps"])\
-        .agg(F.max("index").alias("max_index"))
+        .agg(F.max(groupMaxIndexCol).alias("max_index"))
     
     # creating the fps column based on rank and tps column
     df_with_fps = dup_removed_scores_labels \
