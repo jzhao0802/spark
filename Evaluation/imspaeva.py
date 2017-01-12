@@ -86,7 +86,6 @@ def _binary_clf_curve(labelAndVectorisedScores, rawPredictionCol, labelCol):
     
     # TODO: script to avoid partition by warning, and span data across clusters nodes
     # creating the cumulative sum for tps
-    # A temporary solution for Spark 1.5.2
     sortedScoresAndLabelsCumSum = labelAndVectorisedScores.sql_ctx \
         .sql(
         "SELECT " + labelCol + ", " + localPosProbCol + ", " + groupSumLabelCol + ", rank, " + groupMaxIndexCol + ", sum(" + groupSumLabelCol + ") OVER (ORDER BY " + groupMaxIndexCol + ") as tps FROM processeddata ")
@@ -94,7 +93,7 @@ def _binary_clf_curve(labelAndVectorisedScores, rawPredictionCol, labelCol):
     # repartitioning
     sortedScoresAndLabelsCumSum = sortedScoresAndLabelsCumSum.coalesce(partition_size)
     
-    # cache after partitioning
+    # # cache after partitioning
     sortedScoresAndLabelsCumSum.cache()
     
     # retain only the group-wise (according to threshold) max tps
@@ -115,6 +114,8 @@ def _binary_clf_curve(labelAndVectorisedScores, rawPredictionCol, labelCol):
     # creating the fps column based on rank and tps column
     df_with_fps = dup_removed_scores_labels \
         .withColumn("fps", 1 + F.col("max_index") - F.col("tps"))
+        
+    sortedScoresAndLabelsCumSum.unpersist()
     
     return df_with_fps
 
